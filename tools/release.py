@@ -67,6 +67,13 @@ def version_code(ver):
     return max(1, p[0] * 10000 + p[1] * 100 + p[2])
 
 
+def repo_slug():
+    """从 origin 地址推导 owner/repo，仓库改名后不用改代码。"""
+    url = git('remote', 'get-url', 'origin')
+    m = re.search(r'github\.com[:/]+([^/]+)/([^/\s]+?)(?:\.git)?$', url)
+    return '%s/%s' % (m.group(1), m.group(2)) if m else url
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -156,9 +163,10 @@ def main():
 
     git('push', '-f', 'origin', 'refs/tags/' + tag)
     log('已推送 tag %s，CI 开始发布' % tag)
+    slug = repo_slug()
     print()
-    print('结果页：https://github.com/aliex9527/yun/releases/tag/%s' % tag)
-    print('日志：  https://github.com/aliex9527/yun/actions')
+    print('结果页：https://github.com/%s/releases/tag/%s' % (slug, tag))
+    print('日志：  https://github.com/%s/actions' % slug)
     print('失败排查：git fetch origin ci-logs && git show origin/ci-logs:.ci/ci-build.log')
 
 
