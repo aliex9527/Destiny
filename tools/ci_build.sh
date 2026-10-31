@@ -77,7 +77,7 @@ export DLT_JDK="$JAVA_HOME"
 export DLT_BT="$BT_DIR"
 export DLT_ANDROID_JAR="$JAR"
 export DLT_KS="${DLT_KS:-$PWD/keystore/dlt-release.jks}"
-export DLT_REQUIRE_KS=1
+export DLT_REQUIRE_KS="${DLT_REQUIRE_KS:-1}"
 log "DLT_VERSION=${DLT_VERSION:-<未设置>}"
 log "DLT_KS=$DLT_KS  存在=$([ -f "$DLT_KS" ] && echo yes || echo no)"
 
