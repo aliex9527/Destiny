@@ -57,33 +57,18 @@ jobs:
           bash tools/ci_build.sh 2>&1 | tee -a ci-build.log
           exit "${PIPESTATUS[0]}"
 
-      - name: 回传日志到 ci-logs 分支
-        if: always()
-        run: |
-          {
-            echo "build outcome: ${{ steps.build.outcome }}"
-            echo "run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } >> ci-build.log
-          mkdir -p .ci
-          cp ci-build.log .ci/ci-build.log
-          git config user.name "ci-bot"
-          git config user.email "ci-bot@users.noreply.github.com"
-          git checkout -B ci-logs
-          git add -f .ci/ci-build.log
-          git commit -m "ci: build log for ${{ github.ref_name }} (${{ steps.build.outcome }})" || echo "no change"
-          git push -f origin ci-logs
-
       - name: 发布 Release
+        id: release
         if: steps.build.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: 运 ${{ steps.ver.outputs.VERSION }}
+          name: Destiny ${{ steps.ver.outputs.VERSION }}
           files: dist/*.apk
           draft: false
           prerelease: false
           body: |
-            ## 运 ${{ steps.ver.outputs.VERSION }}
+            ## Destiny ${{ steps.ver.outputs.VERSION }}
 
             纯本地运行的彩票数据分析工具（Android）。
 
@@ -102,3 +87,22 @@ jobs:
         run: |
           echo "构建未成功，日志已推送到 ci-logs 分支。"
           exit 1
+
+      - name: 回传日志到 ci-logs 分支
+        if: always()
+        run: |
+          {
+            echo "build outcome: ${{ steps.build.outcome }}"
+            echo "release outcome: ${{ steps.release.outcome }}"
+            echo "run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "assets in dist:"
+            ls -l dist/ 2>/dev/null || echo "(no dist)"
+          } >> ci-build.log
+          mkdir -p .ci
+          cp ci-build.log .ci/ci-build.log
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git checkout -B ci-logs
+          git add -f .ci/ci-build.log
+          git commit -m "ci: build log for ${{ github.ref_name }} (${{ steps.build.outcome }})" || echo "no change"
+          git push -f origin ci-logs

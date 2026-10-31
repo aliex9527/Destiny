@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-运 APK 构建脚本（无 Gradle 依赖）
+Destiny APK 构建脚本（无 Gradle 依赖）
 aapt2 -> javac -> d8 -> 打包 dex -> zipalign -> apksigner
 
 注意：aapt2 在包含中文的路径下会报 "failed to open directory"，
@@ -39,9 +39,9 @@ if _ver and not _code:
     # versionCode 必须 >= 1，否则 aapt2 会写成空值
     _code = str(max(1, _p[0] * 10000 + _p[1] * 100 + _p[2]))
 
-VERSION = _ver or '1.4.1'
-VERSION_CODE = _code or '9'
-APP_NAME = '运'
+VERSION = _ver or '1.5.0'
+VERSION_CODE = _code or '10500'
+APP_NAME = 'Destiny'
 KS_PASS = os.environ.get('DLT_KS_PASS') or 'micai2026'
 KS_ALIAS = os.environ.get('DLT_KS_ALIAS') or 'dlt'
 REQUIRE_KS = os.environ.get('DLT_REQUIRE_KS') == '1'

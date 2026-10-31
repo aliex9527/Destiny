@@ -34,7 +34,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /**
- * 运 —— WebView 容器
+ * Destiny —— WebView 容器
  *
  * 页面资源全部来自 assets，通过 https://dlt.local/ 虚拟域名拦截加载，
  * 使 localStorage 拥有稳定的 origin（file:// 下部分机型会丢数据）。

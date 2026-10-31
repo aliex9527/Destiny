@@ -1,9 +1,9 @@
-# 运
+# Destiny
 
 一个纯本地运行的彩票数据分析工具（Android）。所有数据与计算都在设备上完成，除同步开奖公告外不向任何服务器上传内容。
 
 - **包名** `com.micai.dlt`
-- **当前版本** v1.4.0（versionCode 8）
+- **当前版本** v1.5.0（versionCode 10500）
 - **最低系统** Android 6.0（API 23），目标 API 34
 - **安装包** 见 [Releases](../../releases) 页下载；或本地执行 `python tools/build_apk.py` 自行构建（仓库不存放二进制）
 
