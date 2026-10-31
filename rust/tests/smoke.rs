@@ -1,21 +1,40 @@
-//! 无头冒烟测试：不开窗口也能把界面跑一帧，用来抓布局 panic 与索引越界。
+//! 无头冒烟测试：不开窗口也能把界面跑几帧，用来抓布局 panic 与索引越界。
 //!
 //! 桌面预览窗口在本机起不来（环境没有可用 OpenGL），所以界面正确性靠这里兜。
+//! 更完整的视觉检查见 `cargo run --bin render`（把界面光栅化成图片）。
 //! 运行：cargo test
 
-use destiny::{app::{App, Tab}, data, engine, ticket};
+use destiny::{app::App, data, engine, ticket};
 
 #[test]
 fn 四个页签都能渲染不崩溃() {
     let mut app = App::new(None);
     assert!(!app.draws.is_empty(), "内嵌数据没解析出来");
 
-    // 逐页渲染。egui 的测试入口会跑完整的布局，越界/除零会直接 panic。
-    for tab in [Tab::Predict, Tab::Check, Tab::Analysis, Tab::History] {
-        app.tab = tab;
-        egui::__run_test_ui(|ui| {
-            app.body(ui);
-        });
+    let ctx = egui::Context::default();
+    destiny::install_cn_font(&ctx);
+    destiny::install_style(&ctx);
+
+    for tab in [
+        destiny::app::Tab::Predict,
+        destiny::app::Tab::Check,
+        destiny::app::Tab::Analysis,
+        destiny::app::Tab::History,
+    ] {
+        app.set_tab(tab);
+        // 跑两帧：第一帧字体图集才分配，文本布局第二帧才稳定
+        for _ in 0..2 {
+            let mut raw = egui::RawInput::default();
+            raw.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(360.0, 780.0),
+            ));
+            let out = ctx.run_ui(raw, |ui| {
+                ui.set_width(360.0);
+                app.draw(ui);
+            });
+            out.drop_without_applying_deltas();
+        }
     }
 }
 

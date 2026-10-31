@@ -3,7 +3,6 @@
 //! 所有数值都直接取自 web 版 `app.css`，单位是 CSS px，与 egui 的点在
 //! Android 上基本 1:1（dp）。改这里的常量等于改 `app.css`，两版观感一致。
 
-use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2};
 
 /* ============================ 配色 ============================ */
@@ -25,7 +24,9 @@ pub const FAINT: Color32 = Color32::from_rgb(0x9A, 0xA1, 0xAC);
 /// 底栏未选中色
 pub const TAB_IDLE: Color32 = Color32::from_rgb(0x9A, 0xA1, 0xAC);
 /// 分段控件底
-pub const SEG_BG: Color32 = Color32::from_rgb(0xF2, 0xF3, 0xF6);
+/// 分段控件的槽。原版 #F2F3F6 与页面背景 #F4F5F7 几乎同色，
+/// 放在背景上时分不出边界，这里压深两档保证选中块有依托。
+pub const SEG_BG: Color32 = Color32::from_rgb(0xEC, 0xEE, 0xF2);
 /// 浅灰块（球槽、开关底）
 pub const CHIP_BG: Color32 = Color32::from_rgb(0xF4, 0xF5, 0xF7);
 
@@ -51,96 +52,233 @@ pub fn font(size: f32) -> FontId {
     FontId::proportional(size)
 }
 
-/// 粗体：只嵌了一个字重，egui 不支持合成加粗，
-/// 这里靠字号与颜色拉伸权重感，避免假粗体糊边。
+/// 粗体：走单独的粗体字体家族。
+/// egui 不支持合成加粗，只有真正嵌入一份 Bold 字重，
+/// CSS 里的 font-weight:700/750/800 才不会塌成普通字重。
 pub fn bold(size: f32) -> FontId {
-    FontId::proportional(size)
+    FontId::new(size, crate::bold_family())
+}
+
+/// 粗体文本，供 `ui.label()` 使用。
+/// egui 的 RichText 默认走 Proportional（常规字重），必须显式指定家族才是粗体。
+pub fn rb(text: impl Into<String>, size: f32, color: Color32) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(size)
+        .color(color)
+        .family(crate::bold_family())
 }
 
 /* ============================ 基础形状 ============================ */
 
-/// 垂直/水平线性渐变矩形。EGUI 没有原生渐变，用两个三角形拼。
+/// 线性渐变矩形。EGUI 没有原生渐变，用两个三角形拼。
 pub fn gradient(p: &egui::Painter, rect: Rect, from: Color32, to: Color32, vertical: bool) {
     let mut mesh = egui::Mesh::default();
-    let base = mesh.vertices.len() as u32;
-    let (a, b, c, d) = if vertical {
-        (rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom())
+    let (lt, rt, rb, lb) = if vertical {
+        (from, from, to, to)
     } else {
-        (rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom())
+        (from, to, to, from)
     };
-    let (c0, c1) = if vertical { (from, to) } else { (from, to) };
-    mesh.colored_vertex(a, c0);
-    mesh.colored_vertex(b, if vertical { c0 } else { c1 });
-    mesh.colored_vertex(c, c1);
-    mesh.colored_vertex(d, if vertical { c1 } else { c0 });
-    mesh.add_triangle(base, base + 1, base + 2);
-    mesh.add_triangle(base, base + 2, base + 3);
+    mesh.colored_vertex(rect.left_top(), lt);
+    mesh.colored_vertex(rect.right_top(), rt);
+    mesh.colored_vertex(rect.right_bottom(), rb);
+    mesh.colored_vertex(rect.left_bottom(), lb);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(mesh));
+}
+
+/// 圆角矩形的垂直渐变。
+///
+/// `gradient()` 画的是直角矩形，铺到圆角控件上会把四个角切成方的。
+/// 这里按 y 逐段收缩左右边界，形状就是真正的圆角矩形。
+pub fn rounded_gradient(
+    p: &egui::Painter,
+    rect: Rect,
+    radius: f32,
+    from: Color32,
+    to: Color32,
+) {
+    let r = radius
+        .min(rect.width() * 0.5)
+        .min(rect.height() * 0.5)
+        .max(0.0);
+    const N: usize = 24;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=N {
+        let t = i as f32 / N as f32;
+        let y = rect.top() + rect.height() * t;
+        let dy_top = y - rect.top();
+        let dy_bot = rect.bottom() - y;
+        let fy = if dy_top < r {
+            r - dy_top
+        } else if dy_bot < r {
+            r - dy_bot
+        } else {
+            0.0
+        };
+        let inset = if fy > 0.0 {
+            r - (r * r - fy * fy).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        let col = from.lerp_to_gamma(to, t);
+        mesh.colored_vertex(Pos2::new(rect.left() + inset, y), col);
+        mesh.colored_vertex(Pos2::new(rect.right() - inset, y), col);
+    }
+    for i in 0..N as u32 {
+        let a = i * 2;
+        mesh.add_triangle(a, a + 1, a + 3);
+        mesh.add_triangle(a, a + 3, a + 2);
+    }
     p.add(Shape::mesh(mesh));
 }
 
 /// 水平条：底槽 + 填充，用于柱状图与遗漏榜
 pub fn hbar(p: &egui::Painter, rect: Rect, ratio: f32, from: Color32, to: Color32) {
     p.rect_filled(rect, rect.height() * 0.5, SEG_BG);
-    let w = (rect.width() * ratio.clamp(0.0, 1.0)).max(rect.height());
-    if ratio > 0.001 {
-        let fill = Rect::from_min_size(rect.min, Vec2::new(w, rect.height()));
-        gradient(p, fill, from, to, false);
-        // 圆角用同色小圆补两端，避免 mesh 直角露出
-        p.circle_filled(Pos2::new(fill.left() + rect.height() * 0.5, fill.center().y), rect.height() * 0.5, from);
-        p.circle_filled(Pos2::new(fill.right() - rect.height() * 0.5, fill.center().y), rect.height() * 0.5, to);
+    if ratio <= 0.001 {
+        return;
     }
+    let w = (rect.width() * ratio.clamp(0.0, 1.0)).max(rect.height());
+    let fill = Rect::from_min_size(rect.min, Vec2::new(w, rect.height()));
+    // 横向渐变的圆角条：按 x 分段收缩上下边界，两端才是圆的
+    let r = (rect.height() * 0.5).min(w * 0.5);
+    const N: usize = 24;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=N {
+        let t = i as f32 / N as f32;
+        let x = fill.left() + w * t;
+        let dx_l = x - fill.left();
+        let dx_r = fill.right() - x;
+        let fx = if dx_l < r {
+            r - dx_l
+        } else if dx_r < r {
+            r - dx_r
+        } else {
+            0.0
+        };
+        let inset = if fx > 0.0 {
+            r - (r * r - fx * fx).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        let col = from.lerp_to_gamma(to, t);
+        mesh.colored_vertex(Pos2::new(x, fill.top() + inset), col);
+        mesh.colored_vertex(Pos2::new(x, fill.bottom() - inset), col);
+    }
+    for i in 0..N as u32 {
+        let a = i * 2;
+        mesh.add_triangle(a, a + 1, a + 3);
+        mesh.add_triangle(a, a + 3, a + 2);
+    }
+    p.add(Shape::mesh(mesh));
+}
+
+/* ============================ 色彩空间 ============================ */
+
+/// HSL → sRGB。原版热力格用 `hsl(4,72%,96-t*52%)` 这类色阶，
+/// 用 HSL 等比降亮度比拿两个端点插值更接近原色，中间段不会偏色。
+pub fn hsl(h: f32, s: f32, l: f32) -> Color32 {
+    let h = h.rem_euclid(360.0) / 360.0;
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    if s <= f32::EPSILON {
+        let v = (l * 255.0).round() as u8;
+        return Color32::from_rgb(v, v, v);
+    }
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let f = |mut t: f32| -> f32 {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    };
+    let to8 = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(
+        to8(f(h + 1.0 / 3.0)),
+        to8(f(h)),
+        to8(f(h - 1.0 / 3.0)),
+    )
 }
 
 /* ============================ 号码球 ============================ */
 
 /// 画一个号码球。`front` 决定红/蓝，`dim` 用于未命中。
+///
+/// 渐变严格照 CSS：`radial-gradient(circle at 34% 26%, HI, MID 60%, LO)`。
+/// `circle` 未指定尺寸时默认 farthest-corner，半径 = 到最远角的距离 ≈ 1.983r，
+/// 渐变中心相对球心偏移 (-0.32r, -0.48r)。这里用环形网格按这个色场逐点求色，
+/// 比叠若干同心圆平滑得多（叠圆会出现一圈圈色带）。
 pub fn draw_ball(p: &egui::Painter, center: Pos2, d: f32, n: u8, front: bool, dim: bool) {
     let r = d * 0.5;
-    let (hi, mid, lo) = if dim {
-        (
-            Color32::from_rgb(0xF2, 0xF3, 0xF6),
-            Color32::from_rgb(0xE6, 0xE8, 0xED),
-            Color32::from_rgb(0xE6, 0xE8, 0xED),
-        )
+
+    let (hi, mid, lo, txt) = if dim {
+        let g = Color32::from_rgb(0xDF, 0xE2, 0xE8);
+        (g, g, g, FAINT)
     } else if front {
-        (BALL_F_HI, RED, BALL_F_LO)
+        (BALL_F_HI, RED, BALL_F_LO, Color32::WHITE)
     } else {
-        (BALL_B_HI, BLUE, BALL_B_LO)
+        (BALL_B_HI, BLUE, BALL_B_LO, Color32::WHITE)
     };
 
-    // 径向渐变：底色 + 由大到小的偏移圆叠出左侧高光
-    p.circle_filled(center, r, mid);
-    p.circle_filled(center, r, lo.gamma_multiply(0.0)); // 占位，保持层级直觉
-    let steps = 5;
-    for i in 0..steps {
-        let t = i as f32 / (steps - 1) as f32;
-        let rr = r * (1.0 - t * 0.62);
-        let c = hi.gamma_multiply(1.0 - t * 0.55).lerp_to_gamma(mid, t * 0.75);
-        let ctr = center + Vec2::new(-r * 0.30 * t, -r * 0.30 * t);
-        p.circle_filled(ctr, rr, c);
-    }
+    if dim {
+        // 未命中：纯色浅灰球，不用渐变，视觉上自然退到背景里
+        p.circle_filled(center, r, Color32::from_rgb(0xEE, 0xF0, 0xF4));
+    } else {
+        let focus = center + Vec2::new(-r * 0.32, -r * 0.48);
+        let far = r * 1.983;
 
-    // 底部内阴影：CSS box-shadow inset 0 -1.5px 2px rgba(0,0,0,.16)
-    if !dim {
-        p.circle_filled(
-            center + Vec2::new(0.0, -r * 0.42),
-            r * 0.96,
-            Color32::TRANSPARENT,
-        );
-        p.circle_filled(center, r, Color32::TRANSPARENT);
-        // 用一圈细弧模拟内阴影，成本很低
-        let pts: Vec<Pos2> = (0..=12)
-            .map(|i| {
-                let a = std::f32::consts::PI * (i as f32 / 12.0) + std::f32::consts::PI;
-                center + Vec2::new(a.cos() * (r - 0.6), a.sin() * (r - 0.6))
-            })
-            .collect();
-        for w in pts.windows(2) {
-            p.line_segment([w[0], w[1]], Stroke::new(1.4, Color32::from_black_alpha(26)));
+        const RINGS: usize = 10;
+        const SEGS: usize = 34;
+        let mut mesh = egui::Mesh::default();
+        for i in 0..=RINGS {
+            let t = i as f32 / RINGS as f32;
+            let rad = r * t;
+            for j in 0..=SEGS {
+                let a = std::f32::consts::TAU * j as f32 / SEGS as f32;
+                let pt = center + Vec2::new(a.cos(), a.sin()) * rad;
+                let u = ((pt - focus).length() / far).clamp(0.0, 1.0);
+                let col = if u < 0.6 {
+                    hi.lerp_to_gamma(mid, u / 0.6)
+                } else {
+                    mid.lerp_to_gamma(lo, (u - 0.6) / 0.4)
+                };
+                mesh.colored_vertex(pt, col);
+            }
         }
+        let stride = (SEGS + 1) as u32;
+        for i in 0..RINGS as u32 {
+            for j in 0..SEGS as u32 {
+                let a = i * stride + j;
+                let b = a + 1;
+                let c = a + stride;
+                mesh.add_triangle(a, b, c + 1);
+                mesh.add_triangle(a, c + 1, c);
+            }
+        }
+        p.add(Shape::mesh(mesh));
+
+        // 边缘柔化：切线一圈半透明同色，压掉网格的锯齿
+        let edge = mid.lerp_to_gamma(lo, 0.5);
+        p.circle_stroke(center, r - 0.4, Stroke::new(0.9, edge.gamma_multiply(0.55)));
     }
 
-    let txt = if dim { FAINT } else { Color32::WHITE };
     p.text(
         center,
         Align2::CENTER_CENTER,
@@ -200,19 +338,52 @@ pub fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 
 pub fn card_tinted(ui: &mut Ui, fill: Color32, add: impl FnOnce(&mut Ui)) {
     let w = ui.available_width();
-    let start = ui.cursor().min;
-    let resp = egui::Frame::new()
+    // CSS --shadow: 0 1px 2px rgba(15,19,25,.04), 0 6px 18px -12px rgba(15,19,25,.14)
+    // egui 的 Shadow 只有一层，这里取合成后的观感：几乎不下移、较大模糊、极淡。
+    let shadow = egui::epaint::Shadow {
+        offset: [0, 3],
+        blur: 14,
+        spread: 0,
+        color: Color32::from_rgba_unmultiplied(15, 19, 25, 26),
+    };
+    egui::Frame::new()
         .fill(fill)
         .stroke(Stroke::new(1.0, LINE))
         .corner_radius(CARD_R)
         .inner_margin(egui::Margin::symmetric(14, 14))
+        .shadow(shadow)
         .show(ui, |ui| {
             ui.set_width(w - 28.0);
             add(ui);
         });
-    let _ = start;
     ui.add_space(12.0);
-    let _ = resp;
+}
+
+/// 柔和投影：多层半透明圆角矩形叠出模糊边，替代 egui 没有的多重 box-shadow。
+/// `dy` 是整体下移量，`spread` 是扩散范围。
+pub fn drop_shadow(
+    p: &egui::Painter,
+    rect: Rect,
+    rounding: f32,
+    dy: f32,
+    spread: f32,
+    color: Color32,
+) {
+    const LAYERS: usize = 7;
+    for i in 0..LAYERS {
+        let t = i as f32 / (LAYERS - 1) as f32; // 0 → 1，越大越外扩越淡
+        let grow = spread * t;
+        let a = color.a() as f32 * (1.0 - t).powf(1.8) * 0.5;
+        let r = Rect::from_center_size(
+            rect.center() + Vec2::new(0.0, dy),
+            rect.size() + Vec2::splat(grow * 2.0),
+        );
+        p.rect_filled(
+            r,
+            rounding + grow,
+            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a as u8),
+        );
+    }
 }
 
 /// 段落标题（卡片外的灰黑小标题）
@@ -277,11 +448,19 @@ pub fn primary(ui: &mut Ui, text: &str, icon: Option<fn(&egui::Painter, Rect, Co
     } else {
         Color32::from_rgb(0xCB, 0x21, 0x19)
     };
-    // 圆角矩形打底，渐变叠在内部，避免直角露出
+    // CSS: box-shadow 0 10px 22px -12px rgba(203,33,25,.9)
+    // spread 为负值，实际是很小的一圈柔光，不能用大扩散
+    drop_shadow(
+        p,
+        rect,
+        15.0,
+        if resp.is_pointer_button_down_on() { 3.0 } else { 5.0 },
+        2.0,
+        Color32::from_rgb(0xCB, 0x21, 0x19).gamma_multiply(0.34),
+    );
     p.rect_filled(rect, 15.0, bot);
-    let inner = rect.shrink2(Vec2::new(4.0, 4.0));
-    gradient(p, inner, top, bot, true);
-    p.rect_filled(inner, 11.0, Color32::TRANSPARENT);
+    // 圆角渐变覆盖，边角不会被切成直角
+    rounded_gradient(p, rect.shrink(0.5), 14.7, top, bot);
 
     let galley = p.layout_no_wrap(text.to_owned(), bold(16.0), Color32::WHITE);
     let tw = galley.size().x;
@@ -336,6 +515,8 @@ pub fn chip(ui: &mut Ui, text: &str, on: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click());
     let p = ui.painter();
     if on {
+        // CSS: box-shadow 0 4px 12px -6px rgba(222,51,43,.8)
+        drop_shadow(p, rect, 11.0, 3.0, 2.5, RED.gamma_multiply(0.5));
         p.rect_filled(rect, 11.0, RED);
         p.text(rect.center(), Align2::CENTER_CENTER, text, bold(13.0), Color32::WHITE);
     } else {
@@ -346,20 +527,25 @@ pub fn chip(ui: &mut Ui, text: &str, on: bool) -> Response {
     resp
 }
 
-/// 分段控件：灰底槽 + 选中白块
+/// 分段控件：灰底槽 + 选中白块。`wide` 时铺满可用宽度。
 pub fn seg(ui: &mut Ui, labels: &[&str], active: usize, wide: bool) -> Option<usize> {
-    let width = if wide { ui.available_width() } else { 0.0 };
-    let h = 34.0;
-    let (rect, _) = if wide {
-        ui.allocate_exact_size(Vec2::new(width, h), Sense::hover())
+    let w = if wide {
+        ui.available_width()
     } else {
         let mut w = 8.0;
         for l in labels {
             let g = ui.painter().layout_no_wrap(l.to_string(), bold(12.5), SUB);
             w += g.size().x + 22.0 + 2.0;
         }
-        ui.allocate_exact_size(Vec2::new(w, h), Sense::hover())
+        w
     };
+    seg_fixed(ui, labels, active, w)
+}
+
+/// 指定宽度的分段控件（用于两个等分并排的场景）
+pub fn seg_fixed(ui: &mut Ui, labels: &[&str], active: usize, width: f32) -> Option<usize> {
+    let h = 34.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 10.0, SEG_BG);
 
@@ -377,6 +563,7 @@ pub fn seg(ui: &mut Ui, labels: &[&str], active: usize, wide: bool) -> Option<us
             hit = Some(i);
         }
         if i == active {
+            drop_shadow(p, cr, 8.0, 1.0, 1.5, Color32::from_rgba_unmultiplied(15, 19, 25, 40));
             p.rect_filled(cr, 8.0, CARD);
             p.text(cr.center(), Align2::CENTER_CENTER, *label, bold(12.5), RED);
         } else {

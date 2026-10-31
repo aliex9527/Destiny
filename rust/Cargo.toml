@@ -7,32 +7,46 @@ description = "Destiny - 本地彩票数据分析工具（Rust 原生实现）"
 
 [lib]
 name = "destiny"
-crate-type = ["cdylib", "rlib"]
+# 平时只出 rlib：桌面工具（preview / render）要链接它。
+# Windows 上同时产出 cdylib 会让 GNU ld 报 "export ordinal too large"
+# （lib 里符号太多，超过 DLL 导出序号上限）。
+# Android 打包时用 `cargo rustc --crate-type cdylib --features native` 单独产出 .so。
+crate-type = ["rlib"]
 
-# 桌面预览：同一套 UI 代码在 Windows 上跑，用来截图检查布局，
-# 不必每次刷机验证。发布产物不含它。
+# eframe 只在真机（NativeActivity）和桌面窗口版里需要；
+# 离屏渲染器只用 egui，不链接它——少一堆依赖，也少一类崩溃面。
+[features]
+default = []
+native = ["dep:eframe"]
+
+# 桌面窗口版：同一套 UI 在 Windows 上跑，用来截图检查布局。
+# 发布产物不含它。
 [[bin]]
 name = "preview"
 path = "src/main.rs"
+required-features = ["native"]
+
+# 离屏渲染：没有 GPU 的机器上把 UI 光栅化成 PPM，用来检查界面
+[[bin]]
+name = "render"
+path = "src/bin/render.rs"
 
 [dependencies]
+egui = "0.37"
+log = "0.4"
+
 # glow 后端（OpenGL ES）比 wgpu 轻得多，Android 上覆盖也更广
-eframe = { version = "0.37", default-features = false, features = [
+eframe = { version = "0.37", optional = true, default-features = false, features = [
     "glow",
     "default_fonts",
     "android-native-activity",
 ] }
-egui = "0.37"
-log = "0.4"
 
 # ndk-sys 只允许为 Android 编译，这两个必须按平台限定，
-# 否则桌面预览（src/main.rs）会直接编译失败。
+# 否则桌面工具会直接编译失败。
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.15"
-
-[dev-dependencies]
-egui = "0.37"
 
 [profile.release]
 opt-level = "z"

@@ -9,23 +9,43 @@ pub mod engine;
 pub mod theme;
 pub mod ticket;
 
-use eframe::egui;
 
 /// 内嵌中文字体子集（由 `tools/make_font.py` 生成）。
 /// egui 不自带中文字形，不嵌入会全部显示成方块。
-const FONT_CN: &[u8] = include_bytes!("../assets/font_subset.ttf");
+const FONT_REGULAR: &[u8] = include_bytes!("../assets/font_regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../assets/font_bold.ttf");
+
+/// 粗体家族名，`theme::bold()` 用它取字重。
+pub fn bold_family() -> egui::FontFamily {
+    egui::FontFamily::Name(std::sync::Arc::from("bold"))
+}
 
 pub fn install_cn_font(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    fonts
-        .font_data
-        .insert("cn".to_owned(), egui::FontData::from_static(FONT_CN).into());
+    fonts.font_data.insert(
+        "cn".to_owned(),
+        egui::FontData::from_static(FONT_REGULAR).into(),
+    );
+    fonts.font_data.insert(
+        "cn_bold".to_owned(),
+        egui::FontData::from_static(FONT_BOLD).into(),
+    );
+
+    // 常规家族
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
         list.insert(0, "cn".to_owned());
     }
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
         list.push("cn".to_owned());
     }
+
+    // 粗体家族：优先粗体字形，粗体子集里没有的字自动回退到常规字重，
+    // 所以不会出现方块，也不会因为某个生僻字突然变细。
+    fonts.families.insert(
+        bold_family(),
+        vec!["cn_bold".to_owned(), "cn".to_owned()],
+    );
+
     ctx.set_fonts(fonts);
 }
 
@@ -45,7 +65,7 @@ pub fn install_style(ctx: &egui::Context) {
     });
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "native"))]
 fn native_options(app: Option<android_activity::AndroidApp>) -> eframe::NativeOptions {
     eframe::NativeOptions {
         android_app: app,
@@ -53,7 +73,7 @@ fn native_options(app: Option<android_activity::AndroidApp>) -> eframe::NativeOp
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "native"))]
 #[no_mangle]
 fn android_main(android_app: android_activity::AndroidApp) {
     android_logger::init_once(

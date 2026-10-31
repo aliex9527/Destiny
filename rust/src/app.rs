@@ -6,7 +6,6 @@
 
 use std::path::PathBuf;
 
-use eframe::egui;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::data::{self, Draw, BACK_PICK, BM, FRONT_PICK, FM};
@@ -303,11 +302,11 @@ impl App {
                     );
                 });
                 ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(d.as_ref().map(|x| x.issue.clone()).unwrap_or_else(|| "—".into()))
-                        .size(14.5)
-                        .color(theme::INK),
-                );
+                ui.label(theme::rb(
+                    d.as_ref().map(|x| x.issue.clone()).unwrap_or_else(|| "—".into()),
+                    14.5,
+                    theme::INK,
+                ));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(d.as_ref().map(|x| x.date.clone()).unwrap_or_default())
@@ -357,21 +356,22 @@ impl App {
 
         // ---- 参数 ----
         theme::card(ui, |ui| {
-            // 统计范围
+            // 统计范围（CSS .row 上下 padding 9px）
             let w = ui.available_width();
-            let (r, _) = ui.allocate_exact_size(Vec2::new(w, 34.0), Sense::hover());
+            let (r, _) = ui.allocate_exact_size(Vec2::new(w, 31.0), Sense::hover());
             let p = ui.painter();
             p.text(r.left_center(), Align2::LEFT_CENTER, "统计范围", theme::bold(13.0), theme::INK2);
             let txt = format!("近一年 · {} 期", self.window);
             p.text(r.right_center(), Align2::RIGHT_CENTER, txt, theme::font(12.5), theme::SUB);
 
+            ui.add_space(9.0);
             theme::dashed_line(ui);
+            ui.add_space(9.0);
 
             // 生成注数
-            ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(1.0);
-                ui.label(egui::RichText::new("生成注数").size(13.0).color(theme::INK2));
+                ui.label(theme::rb("生成注数", 13.0, theme::INK2));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(i) = theme::seg(ui, &["1 注", "3 注", "5 注", "10 注"], count_idx(self.count), false) {
                         self.count = [1usize, 3, 5, 10][i];
@@ -441,11 +441,11 @@ impl App {
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("核对期号").size(11.0).color(theme::SUB));
                     ui.label(
-                        egui::RichText::new(
+                        theme::rb(
                             target.as_ref().map(|d| d.issue.clone()).unwrap_or_else(|| "—".into()),
-                        )
-                        .size(16.0)
-                        .color(theme::INK),
+                            16.0,
+                            theme::INK,
+                        ),
                     );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -474,10 +474,16 @@ impl App {
             }
         });
 
-        // ---- 单式 / 复式，不追加 / 追加 ----
+        // ---- 单式 / 复式，不追加 / 追加（CSS .ck-seg：两个各占一半，间距 8）----
+        let half = ((ui.available_width() - 9.0) * 0.5).max(80.0);
         ui.horizontal(|ui| {
             ui.add_space(1.0);
-            if let Some(i) = theme::seg(ui, &["单式", "复式"], if self.ck_multi { 1 } else { 0 }, false) {
+            if let Some(i) = theme::seg_fixed(
+                ui,
+                &["单式", "复式"],
+                if self.ck_multi { 1 } else { 0 },
+                half,
+            ) {
                 self.ck_multi = i == 1;
                 if !self.ck_multi {
                     self.ck_front.truncate(FRONT_PICK);
@@ -485,7 +491,12 @@ impl App {
                 }
             }
             ui.add_space(8.0);
-            if let Some(i) = theme::seg(ui, &["不追加", "追加"], if self.ck_extra { 1 } else { 0 }, false) {
+            if let Some(i) = theme::seg_fixed(
+                ui,
+                &["不追加", "追加"],
+                if self.ck_extra { 1 } else { 0 },
+                half,
+            ) {
                 self.ck_extra = i == 1;
             }
         });
@@ -611,7 +622,14 @@ impl App {
 
         // ---- 和值分布 ----
         theme::card(ui, |ui| {
-            card_head(ui, "前区和值分布", &format!("均值 {:.1}", st.sum_mean));
+            card_head(
+                ui,
+                "前区和值分布",
+                &format!(
+                    "均值 {:.1} · 80% 区间 {:.0}–{:.0}",
+                    st.sum_mean, st.sum_q10, st.sum_q90
+                ),
+            );
             ui.add_space(10.0);
             histogram(ui, &st.sums_sorted);
         });
@@ -851,6 +869,12 @@ fn pick_card(ui: &mut egui::Ui, s: &engine::PickSet) {
         .stroke(Stroke::new(1.0, theme::LINE))
         .corner_radius(15.0)
         .inner_margin(egui::Margin::symmetric(13, 12))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 3],
+            blur: 14,
+            spread: 0,
+            color: Color32::from_rgba_unmultiplied(15, 19, 25, 24),
+        })
         .show(ui, |ui| {
             ui.set_width(w - 26.0);
             ui.horizontal(|ui| {
@@ -1052,11 +1076,7 @@ fn check_result(ui: &mut egui::Ui, o: &ticket::Outcome, t: &Draw) {
                 if win { theme::RED } else { theme::INK },
             );
             ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(o.hit_text())
-                    .size(12.0)
-                    .color(theme::SUB),
-            );
+            ui.label(theme::rb(o.hit_text(), 12.0, theme::SUB));
 
             // 命中分布
             ui.add_space(12.0);
@@ -1082,11 +1102,7 @@ fn check_result(ui: &mut egui::Ui, o: &ticket::Outcome, t: &Draw) {
                             .color(theme::INK2),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("¥{}", amt))
-                                .size(17.0)
-                                .color(theme::RED),
-                        );
+                        ui.label(theme::rb(format!("¥{}", amt), 17.0, theme::RED));
                     });
                 });
             }
@@ -1153,9 +1169,6 @@ fn heat_grid(
     let max = vals.iter().cloned().fold(1.0, f64::max);
     let min = vals.iter().cloned().fold(f64::MAX, f64::min);
 
-    let cold = Color32::from_rgb(0xF4, 0xF1, 0xF0);
-    let hot = if blue { theme::BLUE } else { theme::RED };
-
     for i in 0..n {
         let num = from + i as u8;
         let r = i / cols;
@@ -1169,13 +1182,21 @@ fn heat_grid(
         } else {
             0.5
         };
-        let bg = cold.lerp_to_gamma(hot, 0.12 + t * 0.82);
-        p.rect_filled(cr, 9.0, bg);
-        // 深色底用白字，浅色底用深字
-        let fg = if t > 0.55 {
-            Color32::WHITE
+        // 严格照原版：hsl(4,72%,96-t*52%) / hsl(222,78%,95-t*48%)
+        let bg = if blue {
+            theme::hsl(222.0, 0.78, (95.0 - t * 48.0) / 100.0)
         } else {
-            Color32::from_rgb(0x33, 0x38, 0x42)
+            theme::hsl(4.0, 0.72, (96.0 - t * 52.0) / 100.0)
+        };
+        p.rect_filled(cr, 9.0, bg);
+        // 深色底用白字，浅色底用深字（原版阈值 t > 0.70）
+        let light = t > 0.70;
+        let fg = if light {
+            Color32::WHITE
+        } else if blue {
+            Color32::from_rgb(0x28, 0x40, 0x6F)
+        } else {
+            Color32::from_rgb(0x3A, 0x41, 0x50)
         };
         p.text(
             Pos2::new(cr.center().x, cr.center().y + 1.0),
@@ -1184,15 +1205,22 @@ fn heat_grid(
             theme::bold(13.0),
             fg,
         );
-        // 右上角遗漏角标
+        // 右上角遗漏角标：8px，透明度随底色反转
         let om = omit.get(num as usize).copied().unwrap_or(0);
         if om > 0 {
+            let ic = if light {
+                Color32::from_rgba_unmultiplied(255, 255, 255, 210)
+            } else if blue {
+                Color32::from_rgba_unmultiplied(40, 64, 111, 107)
+            } else {
+                Color32::from_rgba_unmultiplied(58, 65, 80, 107)
+            };
             p.text(
-                Pos2::new(cr.right() - 3.0, cr.top() + 2.0),
+                Pos2::new(cr.right() - 3.0, cr.top() + 1.0),
                 Align2::RIGHT_TOP,
                 format!("{}", om),
-                theme::bold(8.0),
-                fg.gamma_multiply(0.62),
+                theme::bold(8.5),
+                ic,
             );
         }
     }
@@ -1283,16 +1311,16 @@ fn omit_row(ui: &mut egui::Ui, num: u8, omit: usize, max: usize, divider: bool) 
 /// 和值直方图（纯手绘，不依赖 canvas）
 fn histogram(ui: &mut egui::Ui, sums: &[f64]) {
     let w = ui.available_width();
-    let h = 132.0;
+    let h = 158.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     let p = ui.painter().clone();
     if sums.is_empty() {
         return;
     }
-    // 分成 20 个桶
+    // 照原版 drawHistogram(..., 40, 160, ...)：40 个桶
     let lo = sums.iter().cloned().fold(f64::MAX, f64::min).floor();
     let hi = sums.iter().cloned().fold(f64::MIN, f64::max).ceil();
-    let bins = 20usize;
+    let bins = 40usize;
     let span = (hi - lo).max(1.0);
     let mut counts = vec![0u32; bins];
     for &s in sums {
@@ -1302,13 +1330,31 @@ fn histogram(ui: &mut egui::Ui, sums: &[f64]) {
     let max = counts.iter().copied().max().unwrap_or(1).max(1);
 
     let base = rect.bottom() - 16.0;
+    let plot_top = rect.top() + 6.0;
+    // 三条横向网格线，让高度可读
+    for k in 1..=3 {
+        let y = base - (base - plot_top) * k as f32 / 3.0;
+        let mut x = rect.left();
+        while x < rect.right() {
+            let x2 = (x + 3.0).min(rect.right());
+            p.line_segment(
+                [Pos2::new(x, y), Pos2::new(x2, y)],
+                Stroke::new(1.0, theme::LINE.gamma_multiply(0.7)),
+            );
+            x += 6.0;
+        }
+    }
+
     let bw = rect.width() / bins as f32;
     for (i, &c) in counts.iter().enumerate() {
-        let bh = (c as f32 / max as f32) * (base - rect.top() - 6.0);
-        let x = rect.left() + bw * i as f32 + 1.0;
+        if c == 0 {
+            continue;
+        }
+        let bh = (c as f32 / max as f32) * (base - plot_top);
+        let x = rect.left() + bw * i as f32 + 0.5;
         let r = Rect::from_min_max(
             Pos2::new(x, base - bh),
-            Pos2::new(x + bw - 2.0, base),
+            Pos2::new(x + (bw - 1.0).max(1.0), base),
         );
         let t = i as f32 / (bins - 1) as f32;
         theme::gradient(
@@ -1405,8 +1451,17 @@ fn hist_item(ui: &mut egui::Ui, d: &Draw) {
 
 /* ============================ 主循环 ============================ */
 
+#[cfg(feature = "native")]
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+}
+
+impl App {
+    /// 绘制整个界面。与 eframe 解耦，离屏渲染器（src/bin/render.rs）也走这里，
+    /// 保证「截图检查」和真机跑的是同一份代码。
+    pub fn draw(&mut self, ui: &mut egui::Ui) {
         let bg = ui.max_rect();
         ui.painter().rect_filled(bg, 0.0, theme::BG);
 
@@ -1418,6 +1473,7 @@ impl eframe::App for App {
             egui::ScrollArea::vertical()
                 .max_height(scroll_h)
                 .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     egui::Frame::new()

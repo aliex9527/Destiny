@@ -1,18 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""把系统中文字体裁剪成 APK 内嵌的子集字体。
+"""把系统中文字体裁剪成 APK 内嵌的子集字体（常规 + 粗体两个字重）。
 
-egui 不绑定任何字体，中文必须自带。完整字体 10~17MB，直接塞进 APK 无法接受，
-因此按实际用到的字符集裁剪。字符集取三部分并集：
+egui 不绑定任何字体，中文必须自带；而且 egui 不支持合成加粗，
+只有 Embed 一份真正粗体，`font-weight:700` 的标题才不会糊成一片。
 
-  1. 前端与 Rust 源码里出现的全部字符（自动扫描，改文案后重跑即可）
-  2. GB2312 全集 6763 字（保证界面外的新文案、开奖公告、错误提示不缺字）
-  3. ASCII 与常用标点、数学符号
+输出两个文件：
+  rust/assets/font_regular.ttf   常规字重，覆盖 GB2312 全集，保证新文案不缺字
+  rust/assets/font_bold.ttf      粗体，只覆盖源码实际用字（体积小），
+                                 缺字时 egui 自动回退到常规字重，不会出豆腐块
 
 用法：
-    python tools/make_font.py                      # 默认用系统仿宋
-    python tools/make_font.py --src "D:/字体/FZFSJW.TTF"
-    python tools/make_font.py --src X.ttf --no-gb2312   # 只保留实际用字，体积最小
+    python tools/make_font.py                              # 默认微软雅黑（最接近原版 WebView）
+    python tools/make_font.py --regular X.ttf --bold Y.ttf  # 指定任意两个字重文件
+    python tools/make_font.py --regular simfang.ttf --bold simfang.ttf   # 仿宋（单字重会退化）
 """
 import argparse
 import os
@@ -21,10 +22,11 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, 'rust', 'assets')
-OUT_NAME = 'font_subset.ttf'
 
-# 默认字体：Windows 自带仿宋。方正仿宋_GB2312 需自行指定 --src。
-DEFAULT_SRC = r'C:\Windows\Fonts\simfang.ttf'
+# 默认字体：微软雅黑。与原版 CSS 的 "Microsoft YaHei" 同一字体，
+# 也是 WebView 在 Windows/多数国产 ROM 上的实际回退目标，观感最接近。
+DEF_REGULAR = r'C:\Windows\Fonts\msyh.ttc'
+DEF_BOLD = r'C:\Windows\Fonts\msyhbd.ttc'
 
 # 扫描范围：这些目录里的文本决定了「实际用到的字符」
 SCAN_DIRS = ['app/src/main/assets', 'rust/src']
@@ -76,56 +78,72 @@ def gb2312_chars():
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--src', default=DEFAULT_SRC, help='源字体文件')
-    ap.add_argument('--out', default=os.path.join(OUT_DIR, OUT_NAME), help='输出路径')
-    ap.add_argument('--no-gb2312', action='store_true', help='不并入 GB2312 全集')
-    ap.add_argument('--keep', action='store_true', help='保留全部字形（仅调试用）')
-    a = ap.parse_args()
+def split_face(src):
+    """'C:/x/msyh.ttc#1' -> ('C:/x/msyh.ttc', 1)。用于从 TTC 里挑具体 face。"""
+    if '#' in src:
+        path, _, n = src.rpartition('#')
+        return path, int(n)
+    return src, 0
 
-    src = a.src
-    if not os.path.exists(src):
-        print('[失败] 找不到源字体：%s' % src, file=sys.stderr)
-        print('       系统仿宋一般在 C:\\Windows\\Fonts\\simfang.ttf', file=sys.stderr)
-        print('       方正仿宋_GB2312 请用 --src 指定实际路径', file=sys.stderr)
-        return 1
 
-    chars = scan_chars()
-    n_src = len(chars)
-    if not a.no_gb2312:
-        chars |= gb2312_chars()
-    chars |= set(EXTRA)
-    chars |= set(chr(c) for c in range(0x20, 0x7F))  # ASCII 可见字符
-    chars.discard('\n')
+def build(src, chars, out):
+    path, face = split_face(src)
+    if not os.path.exists(path):
+        print('[失败] 找不到源字体：%s' % path, file=sys.stderr)
+        return False
 
     text = ''.join(sorted(chars))
-    print('[font] 源码用字 %d 个，子集合计 %d 个字符' % (n_src, len(text)))
-    print('[font] 源字体 %.1f MB  %s' % (os.path.getsize(src) / 1048576.0, src))
-
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
-    tmp = a.out + '.text'
+    tmp = out + '.text'
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(text)
 
-    cmd = [sys.executable, '-m', 'fontTools.subset', src,
-           '--text-file=' + tmp, '--output-file=' + a.out,
+    cmd = [sys.executable, '-m', 'fontTools.subset', path,
+           '--font-number=%d' % face,
+           '--text-file=' + tmp, '--output-file=' + out,
            '--layout-features=*', '--no-hinting', '--desubroutinize',
            '--drop-tables+=DSIG', '--name-IDs=*', '--recalc-bounds']
-    if a.keep:
-        cmd = [sys.executable, '-m', 'fontTools.subset', src, '--output-file=' + a.out,
-               '--unicodes=*']
     p = subprocess.run(cmd, capture_output=True)
     os.remove(tmp)
     if p.returncode != 0:
-        print('[失败] 子集化出错：\n%s' % (p.stderr or b'').decode('utf-8', 'replace'), file=sys.stderr)
-        return 1
+        print('[失败] 子集化出错（%s）：\n%s'
+              % (path, (p.stderr or b'').decode('utf-8', 'replace')), file=sys.stderr)
+        return False
 
-    size = os.path.getsize(a.out)
-    ratio = size * 100.0 / os.path.getsize(src)
-    print('[font] 输出 %s  %s 字节（原始 %.1f%%）'
-          % (os.path.relpath(a.out, ROOT), format(size, ','), ratio))
-    return 0
+    print('[font] %-18s %-34s %8d 字符  %6.0f KB  (%.1f%%)'
+          % (os.path.basename(out), os.path.basename(path),
+             len(chars), os.path.getsize(out) / 1024.0,
+             os.path.getsize(out) * 100.0 / os.path.getsize(path)))
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--regular', default=DEF_REGULAR, help='常规字重源文件（可写 path#face）')
+    ap.add_argument('--bold', default=DEF_BOLD, help='粗体源文件（可写 path#face）')
+    ap.add_argument('--no-gb2312', action='store_true', help='常规字重也不并入 GB2312 全集')
+    ap.add_argument('--out-dir', default=OUT_DIR)
+    a = ap.parse_args()
+
+    used = scan_chars()
+    print('[font] 源码实际用字 %d 个' % len(used))
+
+    # 常规：源码用字 + GB2312 全集 + 符号 + ASCII
+    reg = set(used) | set(EXTRA) | set(chr(c) for c in range(0x20, 0x7F))
+    if not a.no_gb2312:
+        reg |= gb2312_chars()
+
+    # 粗体：只覆盖实际用字，体积能省一大半；缺字由 egui 回退到常规字重
+    bold = set(used) | set(EXTRA) | set(chr(c) for c in range(0x20, 0x7F))
+
+    ok = build(a.regular, reg, os.path.join(a.out_dir, 'font_regular.ttf'))
+    ok = build(a.bold, bold, os.path.join(a.out_dir, 'font_bold.ttf')) and ok
+
+    if ok:
+        total = sum(os.path.getsize(os.path.join(a.out_dir, n))
+                    for n in ('font_regular.ttf', 'font_bold.ttf'))
+        print('[font] 合计 %.2f MB' % (total / 1048576.0))
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':

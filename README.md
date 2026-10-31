@@ -59,7 +59,7 @@ python tools/build_apk.py
 
 > aapt2 在含中文的路径下会报 `failed to open directory`，脚本因此把全部中间产物放在 ASCII 临时目录，最后再拷回 `dist/`。
 
-## Rust 原生版（v2.1，主线）
+## Rust 原生版（v2.2，主线）
 
 APK 用 Rust 写：没有 WebView、没有一行 Java、APK 里没有 dex，由系统的
 `android.app.NativeActivity` 直接加载 `libdestiny.so`。界面用 egui 逐像素重绘，
@@ -67,10 +67,14 @@ APK 用 Rust 写：没有 WebView、没有一行 Java、APK 里没有 dex，由�
 （顶栏 logo、同步条、四个页签、底部图标栏的结构和文案都一致）。
 
 ```bash
-python tools/build_rust_apk.py --version 2.0.0
+python tools/build_rust_apk.py --version 2.2.0 --code 22000
 ```
 
-产物 `dist/Destiny_v2.0.0_rust.apk`（约 3 MB，arm64）。与 Java 版**同包名、同密钥**。
+产物 `dist/Destiny_v2.2.0_rust.apk`（约 3 MB，arm64）。与 Java 版**同包名、同密钥**。
+
+> `--code` 必须显式给，且要大于已装版本的 versionCode。
+> Android 只认 versionCode，`2.2.0` 按公式算出来是 `20200`，比 v2.1 的 `21000` 还小，
+> 会被当成降级拒绝安装。
 
 > 已经装过 Rust 版（versionCode `20000`）的设备，回装 Java 版时打包必须把 versionCode 提到
 > `20000` 以上，否则系统按降级拒绝安装：
@@ -82,17 +86,30 @@ rust/
 ├── .cargo/config.toml          # 交叉编译链接器 + 国内镜像
 ├── app/AndroidManifest.xml     # NativeActivity + hasCode=false
 ├── assets/
-│   ├── font_subset.ttf         中文字体子集（tools/make_font.py 生成）
+│   ├── font_regular.ttf        常规字重子集（tools/make_font.py 生成）
+│   ├── font_bold.ttf           粗体子集
 │   └── draws.txt               开奖数据（tools/gen_rust_data.py 生成）
 └── src/
     ├── lib.rs                  android_main 入口、字体与样式安装
     ├── app.rs                  四页签界面
-    ├── theme.rs                配色、号码球、卡片
+    ├── theme.rs                配色、号码球、卡片、渐变与投影
     ├── engine.rs               统计与选号引擎（逐行对应 engine.js）
     ├── data.rs                 数据模型与本地存储
     ├── ticket.rs               奖级判定
-    └── main.rs                 桌面预览入口（仅开发用）
+    ├── main.rs                 桌面预览入口（仅开发用，需 --features native）
+    └── bin/render.rs           离屏渲染器：CPU 光栅化成图片，无 GPU 也能看界面
 ```
+
+### 在无 GPU 的机器上查看界面
+
+`render` 把 egui 输出的三角形用 CPU 自己光栅化，不需要 OpenGL：
+
+```bash
+cargo run --release --bin render     # 输出 target/preview-0..3.ppm
+```
+
+三个要点（渲染器里都处理了）：图集跨页签共享、字体图集要跑到不再扩容的那一帧、
+字形覆盖率只能取纹理 alpha（`Color32::from_rgb` 构造出来的 a 恒为 255，会把每个字填成实心块）。
 
 构建链有三个非显然的坑，都已在配置里处理：
 
@@ -102,13 +119,25 @@ rust/
 | 缺 `dlltool` | 宿主编译 proc-macro 时报 `program not found` | `toolchain/bin-shim/dlltool.exe` 是 NDK 里 `llvm-dlltool` 的副本 |
 | egui 无中文字形 | 中文全显示成方块 | `tools/make_font.py` 把系统字体裁成子集后 `include_bytes!` 进 .so |
 
-换字体（例如方正仿宋_GB2312）：把字体文件路径传给子集脚本即可，不用改任何代码。
+### 字体
+
+egui 不支持合成加粗，只嵌一个字重会让所有 `font-weight:700` 的标题塌成普通字重，
+整页看起来又细又糊。所以嵌**两套**：
+
+| 文件 | 来源 | 覆盖范围 | 体积 |
+| --- | --- | --- | --- |
+| `font_regular.ttf` | `msyh.ttc`（微软雅黑 400） | GB2312 全集 7016 字 | 1.7 MB |
+| `font_bold.ttf` | `msyhbd.ttc`（微软雅黑 700） | 源码实际用字 785 个 | 143 KB |
+
+粗体子集缺字时 egui 会自动回退到常规字重，不会出现方块。两套合计 1.83 MB，
+比原来单嵌仿宋（2.2 MB）还小。字体族注册在 `lib.rs` 的 `install_cn_font`，
+`theme::bold()` 走 `FontFamily::Name("bold")`。
+
+换字体只要把源文件传进去，代码不用动：
 
 ```bash
-python tools/make_font.py --src "D:/fonts/FZFS_GB2312.ttf"
+python tools/make_font.py --regular "D:/fonts/X.ttf" --bold "D:/fonts/X-Bold.ttf"
 ```
-
-> 当前用的是 Windows 自带仿宋 `simfang.ttf`（本机未安装方正仿宋_GB2312）。
 
 ## 图标
 
