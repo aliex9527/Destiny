@@ -59,6 +59,52 @@ python tools/build_apk.py
 
 > aapt2 在含中文的路径下会报 `failed to open directory`，脚本因此把全部中间产物放在 ASCII 临时目录，最后再拷回 `dist/`。
 
+## Rust 原生版（v2.0，独立产物）
+
+除 Java 版之外，仓库里还有一份**全 Rust 重写**的实现：不含 WebView、不含任何 Java 源码，
+APK 里没有 dex，由系统的 `android.app.NativeActivity` 直接加载 `libdestiny.so`，界面用 egui 自绘。
+
+```bash
+python tools/build_rust_apk.py --version 2.0.0
+```
+
+产物 `dist/Destiny_v2.0.0_rust.apk`（约 3 MB，arm64）。与 Java 版**同包名、同密钥**，
+可以覆盖升级，但界面是重新画的，观感与原版不同。
+
+```
+rust/
+├── Cargo.toml
+├── .cargo/config.toml          # 交叉编译链接器 + 国内镜像
+├── app/AndroidManifest.xml     # NativeActivity + hasCode=false
+├── assets/
+│   ├── font_subset.ttf         中文字体子集（tools/make_font.py 生成）
+│   └── draws.txt               开奖数据（tools/gen_rust_data.py 生成）
+└── src/
+    ├── lib.rs                  android_main 入口、字体与样式安装
+    ├── app.rs                  四页签界面
+    ├── theme.rs                配色、号码球、卡片
+    ├── engine.rs               统计与选号引擎（逐行对应 engine.js）
+    ├── data.rs                 数据模型与本地存储
+    ├── ticket.rs               奖级判定
+    └── main.rs                 桌面预览入口（仅开发用）
+```
+
+构建链有三个非显然的坑，都已在配置里处理：
+
+| 坑 | 现象 | 处理 |
+| --- | --- | --- |
+| 路径含中文 | GNU ld 报 `cannot find ...rcgu.o` | `.cargo/config.toml` 把 `target-dir` 指到 `C:/rsbuild/destiny` |
+| 缺 `dlltool` | 宿主编译 proc-macro 时报 `program not found` | `toolchain/bin-shim/dlltool.exe` 是 NDK 里 `llvm-dlltool` 的副本 |
+| egui 无中文字形 | 中文全显示成方块 | `tools/make_font.py` 把系统字体裁成子集后 `include_bytes!` 进 .so |
+
+换字体（例如方正仿宋_GB2312）：把字体文件路径传给子集脚本即可，不用改任何代码。
+
+```bash
+python tools/make_font.py --src "D:/fonts/FZFS_GB2312.ttf"
+```
+
+> 当前用的是 Windows 自带仿宋 `simfang.ttf`（本机未安装方正仿宋_GB2312）。
+
 ## 图标
 
 当前图标为深红底 `#A80E0A`、七根圆头柱（前五根白、后两根亮蓝 `#5AA0FF`），由 `tools/icon_v13.py` 的 D3 配色渲染：

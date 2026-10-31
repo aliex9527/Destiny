@@ -1,0 +1,29 @@
+# 产物必须落在纯 ASCII 路径：GNU ld 处理不了中文目录，
+# 项目路径含中文时会报 "cannot find ...rcgu.o"。
+[build]
+target-dir = "C:/rsbuild/destiny"
+
+# crates.io 镜像，国内拉取依赖快很多。不需要时可删掉这一段。
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+# Android 交叉编译配置。
+# NDK 的 clang 自带 sysroot 推断，只需显式指定 target triple 即可，
+# 不必像某些教程那样额外设置 --sysroot。
+
+[target.aarch64-linux-android]
+linker = "C:/Users/jscn/WorkBuddy/迷彩/toolchain/android-ndk-r27c/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+rustflags = ["-C", "link-arg=--target=aarch64-linux-android23"]
+
+[target.armv7-linux-androideabi]
+linker = "C:/Users/jscn/WorkBuddy/迷彩/toolchain/android-ndk-r27c/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+rustflags = ["-C", "link-arg=--target=armv7a-linux-androideabi23"]
+
+[env]
+CC_aarch64_linux_android = "C:/Users/jscn/WorkBuddy/迷彩/toolchain/android-ndk-r27c/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android23-clang.cmd"
+AR_aarch64_linux_android = "C:/Users/jscn/WorkBuddy/迷彩/toolchain/android-ndk-r27c/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+CC_armv7_linux_androideabi = "C:/Users/jscn/WorkBuddy/迷彩/toolchain/android-ndk-r27c/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi23-clang.cmd"
+AR_armv7_linux_androideabi = "C:/Users/jscn/WorkBuddy/迷彩/toolchain/android-ndk-r27c/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"

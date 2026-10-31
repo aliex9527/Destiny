@@ -23,3 +23,10 @@ ci-build.log
 # 本机临时日志
 debug.log
 *.log
+
+# Rust 构建产物（实际落在 C:/rsbuild，这里兜底）
+rust/target/
+Cargo.lock.bak
+
+# 字体子集是构建产物，且源字体随系统，不入库（构建前跑 tools/make_font.py）
+rust/assets/font_subset.ttf
