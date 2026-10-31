@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>运</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <div class="hd-in">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect width="24" height="24" rx="5.47" fill="#A80E0A"/>
+            <g fill="#FFFDFA">
+              <rect x="5.064" y="12.048" width="1.488" height="4.08" rx=".744"/>
+              <rect x="7.128" y="9.216" width="1.488" height="6.912" rx=".744"/>
+              <rect x="9.192" y="10.608" width="1.488" height="5.52" rx=".744"/>
+              <rect x="11.256" y="7.2" width="1.488" height="8.928" rx=".744"/>
+              <rect x="13.32" y="9.504" width="1.488" height="6.624" rx=".744"/>
+            </g>
+            <g fill="#5AA0FF">
+              <rect x="15.384" y="11.136" width="1.488" height="4.992" rx=".744"/>
+              <rect x="17.448" y="8.208" width="1.488" height="7.92" rx=".744"/>
+            </g>
+          </svg>
+        </div>
+        <div class="bt">
+          <h1>运</h1>
+          <p id="hdSub">加载中…</p>
+        </div>
+      </div>
+      <button class="ghost-btn" id="btnSync">
+        <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.2h-4.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="syncBtnTxt">同步</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="sync-bar" id="syncBar">
+    <button class="sb-info" id="syncInfo">
+      <span class="dot" id="syncDot"></span>
+      <span id="syncText">正在检查更新…</span>
+    </button>
+  </div>
+
+  <main id="main">
+
+    <!-- ========== 预测 ========== -->
+    <section class="view on" id="v-predict">
+      <div class="card last-card">
+        <div class="last-hd">
+          <div>
+            <span class="lbl">上期开奖</span>
+            <b id="lastIssue">—</b>
+          </div>
+          <span class="date" id="lastDate">—</span>
+        </div>
+        <div class="balls-row" id="lastBalls"></div>
+        <div class="next-line">
+          下一期预计 <b id="nextIssue">—</b> · <span id="nextDate">—</span>
+        </div>
+      </div>
+
+      <div id="savedBox"></div>
+
+      <div class="sec-title">选号策略</div>
+      <div class="chips" id="stratChips"></div>
+      <p class="hint" id="stratDesc"></p>
+
+      <div class="card params">
+        <div class="row">
+          <span class="pl">统计范围</span>
+          <span class="pv">近一年 · <b id="winTxt">—</b> 期</span>
+        </div>
+        <div class="row">
+          <span class="pl">生成注数</span>
+          <div class="seg" id="cntSeg"></div>
+        </div>
+      </div>
+
+      <button class="primary" id="btnRun">
+        <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13l0-8Z" fill="currentColor"/></svg>
+        开始推演
+      </button>
+
+      <div id="predOut"></div>
+      <p class="disclaimer">彩票开奖为独立随机事件，任何统计与模型都无法提高中奖概率。本工具仅用于历史数据的统计分析，结果不构成投注建议，请理性购彩。</p>
+    </section>
+
+    <!-- ========== 验票 ========== -->
+    <section class="view" id="v-check">
+
+      <div class="card ck-top">
+        <div class="ck-hd">
+          <div>
+            <span class="lbl">核对期号</span>
+            <b id="ckIssue">—</b>
+          </div>
+          <button class="ghost-btn sm" id="btnIssuePick">换期</button>
+        </div>
+        <div class="balls-row sm" id="ckDraw"></div>
+        <div class="ck-note" id="ckNote">—</div>
+      </div>
+
+      <div class="photo-box" id="photoBox">
+        <img id="photoImg" alt="票面照片">
+        <button class="photo-del" id="btnPhotoDel" aria-label="删除照片">×</button>
+        <button class="photo-zoom" id="btnPhotoZoom">放大对照</button>
+      </div>
+
+      <div class="ck-seg">
+        <div class="seg" id="ckTypeSeg">
+          <button data-t="single" class="on">单式</button>
+          <button data-t="multi">复式</button>
+        </div>
+        <div class="seg" id="ckExtraSeg">
+          <button data-e="0" class="on">不追加</button>
+          <button data-e="1">追加</button>
+        </div>
+      </div>
+
+      <div class="card pad-card">
+        <div class="pk-hd"><span>前区</span><i id="ckFHd">已选 0 / 5</i></div>
+        <div class="pick-grid" id="ckFront"></div>
+        <div class="pk-hd"><span>后区</span><i id="ckBHd">已选 0 / 2</i></div>
+        <div class="pick-grid six pk-grid-b" id="ckBack"></div>
+        <div class="pk-foot" id="ckFoot"></div>
+      </div>
+
+      <div class="ck-actions">
+        <button class="ghost-btn" id="btnPhoto">
+          <svg viewBox="0 0 24 24"><path d="M4 8.5h3l1.4-2h7.2L17 8.5h3v10H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          拍照对照
+        </button>
+        <button class="ghost-btn" id="btnClear">清空</button>
+      </div>
+
+      <button class="primary" id="btnCheck">
+        <svg viewBox="0 0 24 24"><path d="M4.5 12.5l5 5 10-11" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        核对是否中奖
+      </button>
+
+      <div id="ckResult"></div>
+
+      <div class="sec-title">我的彩票</div>
+      <div id="ckSaved"></div>
+
+      <p class="disclaimer">验票结果按官方奖级规则本地计算，仅供核对参考；实际兑奖以体彩终端与官方公告为准。开奖号码来自联网同步或内置历史数据。</p>
+    </section>
+
+    <!-- ========== 分析 ========== -->
+    <section class="view" id="v-analysis">
+      <div class="card">
+        <div class="card-hd"><h3>前区热度（1–35）</h3><span class="sub" id="anaWinTxt"></span></div>
+        <div class="heat" id="heatF"></div>
+        <div class="legend">
+          <span class="lg-bar"></span><span>冷</span><span>热</span>
+          <span class="lg-dot"></span><span>角标为当前遗漏</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>后区热度（1–12）</h3></div>
+        <div class="heat small" id="heatB"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>前区和值分布</h3><span class="sub" id="sumTxt"></span></div>
+        <canvas id="sumChart" class="chart"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>奇偶结构</h3></div>
+        <div id="oddBars" class="bars"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>大小结构（1–17 / 18–35）</h3></div>
+        <div id="bigBars" class="bars"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>五分区分布</h3></div>
+        <div id="zoneBars" class="bars"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>遗漏榜 · 前区</h3><span class="sub">距离上次出现</span></div>
+        <div id="omitList" class="omit-list"></div>
+      </div>
+      <p class="disclaimer">遗漏值只描述历史，不改变任何号码的下一期出现概率。理论上每个前区号码每期出现概率恒为 5/35 ≈ 14.29%。</p>
+    </section>
+
+    <!-- ========== 历史 ========== -->
+    <section class="view" id="v-history">
+      <div class="searchbar">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="2" fill="none"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input id="qInput" placeholder="搜索期号 / 号码，如 26123 或 13 18 19" inputmode="numeric">
+      </div>
+      <div class="list-hd"><span id="histCount">—</span><span>点击查看期次特征</span></div>
+      <div id="histList" class="hist-list"></div>
+      <div class="load-more"><button class="ghost-btn wide" id="btnMore">加载更多</button></div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="predict" class="on">
+      <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13V2Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
+      <span>推演</span>
+    </button>
+    <button data-tab="check">
+      <svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2.5" stroke="currentColor" stroke-width="1.9" fill="none"/><path d="M8 8h8M8 12h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M8 16.5l1.8 1.8 3.4-3.6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>验票</span>
+    </button>
+    <button data-tab="analysis">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10m5 10V4m5 16v-7m5 7V8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>分析</span>
+    </button>
+    <button data-tab="history">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>历史</span>
+    </button>
+  </nav>
+
+  <!-- 底部弹层 -->
+  <div class="sheet" id="sheet">
+    <div class="sheet-mask" data-close></div>
+    <div class="sheet-in">
+      <div class="grab"></div>
+      <div id="sheetBody"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script src="data.js"></script>
+<script src="ticket.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
