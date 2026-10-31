@@ -36,7 +36,8 @@ _code = os.environ.get('DLT_VERSION_CODE')
 if _ver and not _code:
     # 只给了版本号时按 MAJOR*10000+MINOR*100+PATCH 编码，保证单调递增
     _p = ([int(x) for x in re.findall(r'\d+', _ver)[:3]] + [0, 0, 0])[:3]
-    _code = str(_p[0] * 10000 + _p[1] * 100 + _p[2])
+    # versionCode 必须 >= 1，否则 aapt2 会写成空值
+    _code = str(max(1, _p[0] * 10000 + _p[1] * 100 + _p[2]))
 
 VERSION = _ver or '1.4.1'
 VERSION_CODE = _code or '9'
