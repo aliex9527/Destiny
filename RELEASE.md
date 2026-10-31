@@ -78,6 +78,7 @@ git push -f origin v1.5.1                     # 推 tag 触发发布
 | `apksigner verify` 失败 | 密钥口令不对（`KS_PASS` / `DLT_KS_PASS`） |
 | CI 报 `远端没有 release-assets 分支` | 没先跑 `tools/release.py` 推包，或只推了 tag |
 | CI 报 `包内版本与 tag 不一致` | 推的包版本与 tag 不符，检查 `--version` 是否与构建产物对应 |
+| 推了 tag 但 Actions 没动静 | 强制更新已有 tag 不一定触发；`tools/release.py` 已自动改为「先删远端 tag 再推」，手工推时照做 |
 | `release outcome: failure` | 拉日志：`git fetch origin ci-logs && git show origin/ci-logs:.ci/ci-build.log` |
 | Actions 不触发 | 仓库禁用了 Actions：Settings → Actions → General → 允许所有 action |
 | 想验证 Linux 构建链路 | 推 `smoke-*` tag，走 `smoke.yml`，用临时密钥构建、不发布 |

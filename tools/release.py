@@ -161,7 +161,11 @@ def main():
         log('--no-push：未推送。手动执行 git push -f origin %s 可触发发布' % tag)
         return
 
-    git('push', '-f', 'origin', 'refs/tags/' + tag)
+    # 强制更新已有的 tag 不一定会触发 CI，实测需先删远端 tag 再推（等价于新建）
+    if git('ls-remote', '--tags', 'origin', 'refs/tags/' + tag):
+        log('远端已有同名 tag，先删除再推，确保触发发布')
+        git('push', 'origin', ':refs/tags/' + tag)
+    git('push', 'origin', 'refs/tags/' + tag)
     log('已推送 tag %s，CI 开始发布' % tag)
     slug = repo_slug()
     print()
