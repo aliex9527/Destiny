@@ -78,8 +78,10 @@ jobs:
             if [ -n "$BT" ] && [ -x "$BT/aapt2" ]; then
               BADGING="$("$BT/aapt2" dump badging "$APK" | head -1)"
               echo "$BADGING"
-              VN="$(printf '%s' "$BADGING" | grep -o "versionName='[^']*'" | cut -d\"'\" -f2)"
-              VC="$(printf '%s' "$BADGING" | grep -o "versionCode='[^']*'" | cut -d\"'\" -f2)"
+              # head -1 必要：badging 里还有 platformBuildVersionName / platformBuildVersionCode，
+              # 不加会取到两个值拼在一起
+              VN="$(printf '%s' "$BADGING" | grep -o "versionName='[^']*'" | head -1 | cut -d\' -f2)"
+              VC="$(printf '%s' "$BADGING" | grep -o "versionCode='[^']*'" | head -1 | cut -d\' -f2)"
               echo "包内 versionName=$VN versionCode=$VC / tag 期望 $VER"
               if [ "$VN" != "$VER" ]; then
                 echo "[失败] 包内版本与 tag 不一致：$VN != $VER"
