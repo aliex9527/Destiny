@@ -5,7 +5,7 @@
 - **包名** `com.micai.dlt`
 - **当前版本** v1.4.0（versionCode 8）
 - **最低系统** Android 6.0（API 23），目标 API 34
-- **安装包** [`dist/运_v1.4.0.apk`](dist/运_v1.4.0.apk)（约 129 KB）
+- **安装包** 见 [Releases](../../releases) 页下载；或本地执行 `python tools/build_apk.py` 自行构建（仓库不存放二进制）
 
 ## 功能
 
