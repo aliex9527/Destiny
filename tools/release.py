@@ -43,11 +43,16 @@ def fail(msg, code=1):
 
 
 def git(*args, stdin=None):
-    p = subprocess.run(['git'] + list(args), cwd=ROOT, text=True,
-                       input=stdin, capture_output=True)
+    # 必须走二进制 stdin：Windows 下 text 模式会把 \n 转成 \r\n，
+    # 导致 mktree 生成 "dist\r/xxx.apk\r" 这种带回车符的路径，CI 匹配不到。
+    data = stdin.encode('utf-8') if isinstance(stdin, str) else stdin
+    p = subprocess.run(['git'] + list(args), cwd=ROOT,
+                       input=data, capture_output=True)
+    out = (p.stdout or b'').decode('utf-8', 'replace')
+    err = (p.stderr or b'').decode('utf-8', 'replace')
     if p.returncode != 0:
-        fail('git %s 失败：%s' % (' '.join(args), (p.stderr or p.stdout).strip()))
-    return p.stdout.strip()
+        fail('git %s 失败：%s' % (' '.join(args), (err or out).strip()))
+    return out.strip()
 
 
 def base_version():
@@ -98,6 +103,10 @@ def push_assets(apk):
     tree_dist = git('mktree', stdin='100644 blob %s\t%s\n' % (blob, name))
     tree_root = git('mktree', stdin='040000 tree %s\tdist\n' % tree_dist)
     commit = git('commit-tree', tree_root, '-m', 'release %s' % name)
+    expected = 'dist/' + name
+    listing = git('ls-tree', '-r', '--name-only', commit)
+    if listing.splitlines() != [expected]:
+        fail('release-assets 提交内容异常，期望只有 %r，实际：%r' % (expected, listing))
     git('push', '-f', 'origin', '%s:refs/heads/%s' % (commit, BRANCH))
     log('已推送 %s -> 分支 %s（commit %s）' % (name, BRANCH, commit[:8]))
     return commit
