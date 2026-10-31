@@ -59,15 +59,12 @@ python tools/build_apk.py
 
 > aapt2 在含中文的路径下会报 `failed to open directory`，脚本因此把全部中间产物放在 ASCII 临时目录，最后再拷回 `dist/`。
 
-## Rust 原生版（v2.0，试验产物，非主线）
+## Rust 原生版（v2.1，主线）
 
-**主线发布始终是 Java 版**（WebView + `assets/` 里的 HTML/CSS/JS）。界面由浏览器渲染，
-中文排版、滚动惯性、输入法体验都是原生的；Rust 版用 egui 自绘，观感比不上，因此只保留作对照，
-`tools/release.py` 走的也是 Java 版构建链。
-
-除 Java 版之外，仓库里还有一份**全 Rust 重写**的实现：不含 WebView、不含任何 Java 源码，
-APK 里没有 dex，由系统的 `android.app.NativeActivity` 直接加载 `libdestiny.so`，界面用 egui 自绘。
-仅用于验证「同一份业务逻辑换技术栈」的可行性，不建议替换主线。
+APK 用 Rust 写：没有 WebView、没有一行 Java、APK 里没有 dex，由系统的
+`android.app.NativeActivity` 直接加载 `libdestiny.so`。界面用 egui 逐像素重绘，
+配色、字号、间距、圆角全部取自 `app/src/main/assets/app.css`，与原版共用一套视觉规格
+（顶栏 logo、同步条、四个页签、底部图标栏的结构和文案都一致）。
 
 ```bash
 python tools/build_rust_apk.py --version 2.0.0

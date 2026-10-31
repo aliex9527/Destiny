@@ -304,7 +304,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "destiny"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "android-activity",
  "android_logger",

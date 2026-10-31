@@ -118,12 +118,15 @@ def cargo_build(target):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', default='2.0.0')
+    ap.add_argument('--code', type=int, default=None,
+                    help='覆盖 versionCode。Android 只认这个数判断升降级，'
+                         '跨技术栈替换时必须显式抬高，versionName 不参与比较')
     ap.add_argument('--abi', default='arm64', choices=['arm64', 'armv7', 'both'])
     ap.add_argument('--no-build', action='store_true', help='跳过 cargo，复用已有 .so')
     a = ap.parse_args()
 
     ver = a.version
-    vcode = version_code(ver)
+    vcode = a.code if a.code else version_code(ver)
     targets = ['arm64'] if a.abi == 'arm64' else (['armv7'] if a.abi == 'armv7' else ['arm64', 'armv7'])
     t0 = time.time()
 

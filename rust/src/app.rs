@@ -1,7 +1,8 @@
-//! 应用状态与界面
+//! 界面：严格对齐 web 版 `index.html` + `app.css`
 //!
-//! 布局不用 egui 的 Panel（它们在 `App::ui` 这种嵌套 Ui 下语义容易混乱），
-//! 改成「固定高顶栏 + 可滚动主体 + 固定底栏」的手工纵向布局，控制更直接。
+//! 布局是「固定顶栏 + 同步条 + 滚动主体 + 固定底栏」，与浏览器里那套
+//! flex 纵向布局一一对应。每个页签的内容顺序、文案、字号都取自原版，
+//! 换技术栈不换观感。
 
 use std::path::PathBuf;
 
@@ -13,8 +14,7 @@ use crate::engine::{self, PredictOpts, PredictResult, Stats, Strategy};
 use crate::theme;
 use crate::ticket;
 
-const HEADER_H: f32 = 56.0;
-const NAV_H: f32 = 62.0;
+/* ============================ 页签 ============================ */
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -25,12 +25,33 @@ pub enum Tab {
 }
 
 impl Tab {
+    /// 标签与原版底栏一致：推演 / 验票 / 分析 / 历史
     const ALL: [(Tab, &'static str); 4] = [
-        (Tab::Predict, "预测"),
-        (Tab::Check, "核对"),
+        (Tab::Predict, "推演"),
+        (Tab::Check, "验票"),
         (Tab::Analysis, "分析"),
         (Tab::History, "历史"),
     ];
+}
+
+/// 同步状态灯
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Dot {
+    Ok,
+    Warn,
+    Bad,
+    Busy,
+}
+
+impl Dot {
+    fn color(self) -> Color32 {
+        match self {
+            Dot::Ok => theme::GREEN,
+            Dot::Warn => theme::GOLD,
+            Dot::Bad => theme::RED,
+            Dot::Busy => theme::BLUE,
+        }
+    }
 }
 
 pub struct App {
@@ -38,32 +59,33 @@ pub struct App {
     pub tab: Tab,
     pub store: Option<PathBuf>,
 
-    // 预测
+    /* 推演 */
     pub strategy: Strategy,
     pub window: usize,
     pub count: usize,
     pub predict: Option<PredictResult>,
     pub predict_ms: f64,
 
-    // 核对
+    /* 验票 */
     pub ck_front: Vec<u8>,
     pub ck_back: Vec<u8>,
+    pub ck_multi: bool,
+    pub ck_extra: bool,
+    pub ck_target: usize,
     pub ck_outcome: Option<ticket::Outcome>,
-    pub ck_target: Option<Draw>,
 
-    // 分析
+    /* 分析 / 历史 */
     pub stats: Stats,
-
-    // 历史
     pub hist_rows: usize,
+    pub query: String,
 
+    /* 通用 */
     pub toast: Option<(String, f64)>,
     pub version: &'static str,
 }
 
 impl App {
     pub fn new(store: Option<PathBuf>) -> Self {
-        // 本地存过更新数据就用本地的，否则用打包时内嵌的基线
         let mut draws = store
             .as_ref()
             .and_then(|p| data::load(p))
@@ -72,6 +94,7 @@ impl App {
             draws = data::baseline();
         }
         let stats = engine::build_stats(&draws, 100);
+        let last = draws.len().saturating_sub(1);
         App {
             draws,
             tab: Tab::Predict,
@@ -83,10 +106,13 @@ impl App {
             predict_ms: 0.0,
             ck_front: Vec::new(),
             ck_back: Vec::new(),
+            ck_multi: false,
+            ck_extra: false,
+            ck_target: last,
             ck_outcome: None,
-            ck_target: None,
             stats,
             hist_rows: 30,
+            query: String::new(),
             toast: None,
             version: env!("CARGO_PKG_VERSION"),
         }
@@ -104,33 +130,26 @@ impl App {
 
     fn header(&mut self, ui: &mut egui::Ui) {
         let w = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, HEADER_H), Sense::hover());
-        let p = ui.painter();
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, theme::HEADER_H), Sense::hover());
+        let p = ui.painter().clone();
         p.rect_filled(rect, 0.0, theme::CARD);
         p.line_segment(
             [rect.left_bottom(), rect.right_bottom()],
             Stroke::new(1.0, theme::LINE),
         );
 
-        // 方形 logo
+        // 36×36 的柱状 logo
         let logo = Rect::from_min_size(
             Pos2::new(rect.left() + 14.0, rect.center().y - 18.0),
             Vec2::splat(36.0),
         );
-        p.rect_filled(logo, 10.0, theme::RED);
-        p.text(
-            logo.center(),
-            Align2::CENTER_CENTER,
-            "D",
-            theme::font(18.0),
-            Color32::WHITE,
-        );
+        theme::logo(&p, logo);
 
         p.text(
             Pos2::new(logo.right() + 10.0, rect.center().y - 9.0),
             Align2::LEFT_CENTER,
             "Destiny",
-            theme::font(16.5),
+            theme::bold(16.5),
             theme::INK,
         );
         let subtitle = match self.latest() {
@@ -145,56 +164,116 @@ impl App {
             theme::SUB,
         );
 
-        // 右侧：共 N 期
+        // 右侧同步按钮
+        let bw = 74.0;
+        let bh = 32.0;
+        let btn = Rect::from_min_size(
+            Pos2::new(rect.right() - 14.0 - bw, rect.center().y - bh * 0.5),
+            Vec2::new(bw, bh),
+        );
+        let resp = ui.interact(btn, ui.id().with("sync-btn"), Sense::click());
+        let fill = if resp.is_pointer_button_down_on() {
+            Color32::from_rgb(0xF7, 0xF8, 0xFA)
+        } else {
+            theme::CARD
+        };
+        p.rect_filled(btn, 11.0, fill);
+        p.rect_stroke(
+            btn,
+            11.0,
+            Stroke::new(1.0, theme::LINE),
+            egui::StrokeKind::Inside,
+        );
+        let icon = Rect::from_center_size(
+            Pos2::new(btn.left() + 18.0, btn.center().y),
+            Vec2::splat(15.0),
+        );
+        theme::icon_sync(&p, icon, theme::INK2);
         p.text(
-            Pos2::new(rect.right() - 14.0, rect.center().y),
-            Align2::RIGHT_CENTER,
-            format!("{} 期", self.draws.len()),
-            theme::font(12.0),
+            Pos2::new(icon.right() + 5.0, btn.center().y),
+            Align2::LEFT_CENTER,
+            "同步",
+            theme::bold(13.0),
+            theme::INK2,
+        );
+        if resp.clicked() {
+            self.say("已是最新数据");
+        }
+    }
+
+    /* ============================ 同步条 ============================ */
+
+    fn sync_bar(&mut self, ui: &mut egui::Ui) {
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, theme::SYNC_H), Sense::hover());
+        let p = ui.painter().clone();
+        p.rect_filled(rect, 0.0, theme::CARD);
+        p.line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            Stroke::new(1.0, theme::LINE),
+        );
+
+        // 本地数据永远可用，所以状态恒为「已是最新」，只是文案里带期号
+        let (dot, text) = match self.latest() {
+            Some(d) => (
+                Dot::Ok,
+                format!("已是最新 · 第 {} 期 · {}", d.issue, d.date),
+            ),
+            None => (Dot::Warn, "暂无开奖数据".to_string()),
+        };
+        let cy = rect.center().y;
+        p.circle_filled(Pos2::new(rect.left() + 17.5, cy), 3.5, dot.color());
+        p.text(
+            Pos2::new(rect.left() + 28.0, cy),
+            Align2::LEFT_CENTER,
+            text,
+            theme::font(11.5),
             theme::SUB,
         );
     }
 
     /* ============================ 底栏 ============================ */
 
-    fn nav(&mut self, ui: &mut egui::Ui) {
+    fn tabbar(&mut self, ui: &mut egui::Ui) {
         let w = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, NAV_H), Sense::hover());
-        let p = ui.painter();
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, theme::TABBAR_H), Sense::hover());
+        let p = ui.painter().clone();
         p.rect_filled(rect, 0.0, theme::CARD);
-        p.line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, theme::LINE));
+        p.line_segment(
+            [rect.left_top(), rect.right_top()],
+            Stroke::new(1.0, theme::LINE),
+        );
 
         let n = Tab::ALL.len();
         let cw = w / n as f32;
         for (i, (tab, label)) in Tab::ALL.iter().enumerate() {
             let cr = Rect::from_min_size(
                 Pos2::new(rect.left() + cw * i as f32, rect.top()),
-                Vec2::new(cw, NAV_H),
+                Vec2::new(cw, theme::TABBAR_H),
             );
-            let resp = ui.interact(cr, ui.id().with(("nav", i)), Sense::click());
-            let active = self.tab == *tab;
+            let resp = ui.interact(cr, ui.id().with(("tab", i)), Sense::click());
             if resp.clicked() {
                 self.tab = *tab;
             }
-            let color = if active { theme::RED } else { theme::SUB };
-            ui.painter().text(
-                cr.center(),
+            let active = self.tab == *tab;
+            let color = if active { theme::RED } else { theme::TAB_IDLE };
+            // 图标 21px，标签 10.5px，整体上移一点给标签留位
+            let icon = Rect::from_center_size(
+                Pos2::new(cr.center().x, cr.top() + 21.0),
+                Vec2::splat(21.0),
+            );
+            theme::tab_icon(&p, icon, i, color);
+            p.text(
+                Pos2::new(cr.center().x, cr.top() + 44.0),
                 Align2::CENTER_CENTER,
                 *label,
-                theme::font(14.0),
+                theme::bold(10.5),
                 color,
             );
-            if active {
-                let bar = Rect::from_min_size(
-                    Pos2::new(cr.center().x - 11.0, cr.top() + 4.0),
-                    Vec2::new(22.0, 3.0),
-                );
-                ui.painter().rect_filled(bar, 2.0, theme::RED);
-            }
         }
     }
 
-    /* ============================ 主体 ============================ */
+    /* ============================ 主体分发 ============================ */
 
     pub fn body(&mut self, ui: &mut egui::Ui) {
         match self.tab {
@@ -205,409 +284,521 @@ impl App {
         }
     }
 
-    /* ---------------- 预测 ---------------- */
+    pub fn set_tab(&mut self, t: Tab) {
+        self.tab = t;
+    }
+
+    /* ======================= 页签一：推演 ======================= */
 
     fn page_predict(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-
+        // ---- 上期开奖 ----
         theme::card(ui, |ui| {
-            theme::note(ui, "选号策略", theme::INK, 14.0);
-            ui.add_space(9.0);
-            let mut picked = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(7.0, 7.0);
-                for s in Strategy::ALL {
-                    if theme::chip(ui, s.name(), self.strategy == s).clicked() {
-                        picked = Some(s);
-                    }
-                }
+            let d = self.draws.last().cloned();
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new("上期开奖")
+                            .size(12.0)
+                            .color(theme::SUB),
+                    );
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(d.as_ref().map(|x| x.issue.clone()).unwrap_or_else(|| "—".into()))
+                        .size(14.5)
+                        .color(theme::INK),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(d.as_ref().map(|x| x.date.clone()).unwrap_or_default())
+                            .size(11.5)
+                            .color(theme::SUB),
+                    );
+                });
             });
-            if let Some(s) = picked {
-                self.strategy = s;
-                self.predict = None;
+            ui.add_space(10.0);
+            if let Some(d) = &d {
+                theme::balls_row(ui, &d.f, &d.b, theme::BALL_D, None);
+                ui.add_space(11.0);
+                // 下一期预计
+                let next = next_issue(&d.issue);
+                let galley = ui.painter().layout_no_wrap(
+                    "下一期预计 ".to_string(),
+                    theme::font(12.0),
+                    theme::SUB,
+                );
+                let (r, _) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), galley.size().y + 4.0),
+                    Sense::hover(),
+                );
+                let p = ui.painter();
+                p.text(r.left_center(), Align2::LEFT_CENTER, "下一期预计 ", theme::font(12.0), theme::SUB);
+                let g2 = p.layout_no_wrap(next, theme::bold(12.0), theme::RED);
+                p.galley(
+                    Pos2::new(r.left() + galley.size().x, r.center().y - g2.size().y * 0.5),
+                    g2,
+                    theme::RED,
+                );
             }
-            ui.add_space(8.0);
-            theme::note(ui, self.strategy.desc(), theme::SUB, 11.5);
         });
 
+        // ---- 选号策略 ----
+        theme::sec_title(ui, "选号策略");
+        ui.horizontal_wrapped(|ui| {
+            for s in Strategy::ALL {
+                if theme::chip(ui, s.name(), self.strategy == s).clicked() {
+                    self.strategy = s;
+                }
+            }
+        });
+        ui.add_space(8.0);
+        theme::para(ui, self.strategy.desc(), 11.5, theme::SUB, 1.55);
         ui.add_space(10.0);
 
+        // ---- 参数 ----
         theme::card(ui, |ui| {
-            theme::note(ui, "统计窗口", theme::INK, 14.0);
-            ui.add_space(9.0);
-            let mut new_window = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(7.0, 7.0);
-                for (label, v) in [("近30期", 30usize), ("近50期", 50), ("近100期", 100), ("全部", 0)] {
-                    if theme::chip(ui, label, self.window == v).clicked() {
-                        new_window = Some(v);
-                    }
-                }
-            });
-            if let Some(v) = new_window {
-                self.window = v;
-                self.predict = None;
-            }
+            // 统计范围
+            let w = ui.available_width();
+            let (r, _) = ui.allocate_exact_size(Vec2::new(w, 34.0), Sense::hover());
+            let p = ui.painter();
+            p.text(r.left_center(), Align2::LEFT_CENTER, "统计范围", theme::bold(13.0), theme::INK2);
+            let txt = format!("近一年 · {} 期", self.window);
+            p.text(r.right_center(), Align2::RIGHT_CENTER, txt, theme::font(12.5), theme::SUB);
 
-            ui.add_space(12.0);
-            theme::note(ui, "生成注数", theme::INK, 14.0);
-            ui.add_space(9.0);
-            let mut new_count = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(7.0, 7.0);
-                for v in [1usize, 3, 5, 10] {
-                    if theme::chip(ui, &format!("{} 注", v), self.count == v).clicked() {
-                        new_count = Some(v);
+            theme::dashed_line(ui);
+
+            // 生成注数
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(1.0);
+                ui.label(egui::RichText::new("生成注数").size(13.0).color(theme::INK2));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(i) = theme::seg(ui, &["1 注", "3 注", "5 注", "10 注"], count_idx(self.count), false) {
+                        self.count = [1usize, 3, 5, 10][i];
                     }
-                }
+                });
             });
-            if let Some(v) = new_count {
-                self.count = v;
-                self.predict = None;
-            }
         });
 
-        ui.add_space(14.0);
-        if theme::primary_button(ui, "生成号码").clicked() {
-            let t0 = std::time::Instant::now();
-            let opts = PredictOpts {
-                strategy: self.strategy,
-                window: self.window,
-                count: self.count,
-                seed: 0,
-                ..Default::default()
-            };
-            let res = engine::predict(&self.draws, &opts);
-            self.predict_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            let n = res.sets.len();
-            self.predict = Some(res);
-            self.say(format!("已生成 {} 注，用时 {:.0} ms", n, self.predict_ms));
+        // ---- 开始推演 ----
+        let resp = ui
+            .vertical(|ui| {
+                ui.add_space(2.0);
+                theme::primary(ui, "开始推演", Some(theme::icon_bolt))
+            })
+            .inner;
+        if resp.clicked() {
+            self.run_predict();
         }
-
         ui.add_space(14.0);
 
+        // ---- 结果 ----
         if let Some(res) = &self.predict {
-            // 先把要显示的数据摘出来，避免与 self 的可变借用冲突
-            let sets: Vec<_> = res
-                .sets
-                .iter()
-                .map(|s| (s.rank, s.f, s.b, s.score, s.tags.clone(), s.sum, s.odd_f, s.big_f, s.consec))
-                .collect();
-            let meta = (res.window, res.strategy.name(), res.sets.len());
-            for (rank, f, b, score, tags, sum, odd, big, consec) in sets {
-                theme::card(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        theme::note(ui, &format!("第 {} 注", rank), theme::INK, 14.5);
-                        ui.add_space(6.0);
-                        if rank == 1 {
-                            let (r, _) = ui.allocate_exact_size(Vec2::new(46.0, 20.0), Sense::hover());
-                            ui.painter().rect_filled(r, 6.0, theme::RED_SOFT);
-                            ui.painter().text(
-                                r.center(),
-                                Align2::CENTER_CENTER,
-                                "首选",
-                                theme::font(11.0),
-                                theme::RED,
-                            );
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            theme::note(ui, &format!("{:.3}", score), theme::GOLD, 13.0);
-                        });
-                    });
-                    ui.add_space(9.0);
-                    theme::balls_row(ui, &f, &b, 16.5, None);
-                    ui.add_space(9.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(6.0, 5.0);
-                        for t in &tags {
-                            tag_pill(ui, t);
-                        }
-                        let _ = (sum, odd, big, consec);
-                    });
-                });
-                ui.add_space(9.0);
+            for s in &res.sets {
+                pick_card(ui, s);
             }
-            theme::note(
+            ui.add_space(2.0);
+            let ms = self.predict_ms;
+            let n = res.stats.n;
+            theme::para(
                 ui,
-                &format!(
-                    "策略 {} · 窗口 {} 期 · 共 {} 注 · 已排除历史开奖组合",
-                    meta.1,
-                    if meta.0 == 0 { self.draws.len() } else { meta.0 },
-                    meta.2
-                ),
-                theme::SUB,
-                11.5,
+                &format!("本次推演用时 {:.1} ms · 参与统计 {} 期", ms, n),
+                11.0,
+                theme::FAINT,
+                1.5,
             );
-            ui.add_space(20.0);
         }
+
+        theme::disclaimer(
+            ui,
+            "彩票开奖为独立随机事件，任何统计与模型都无法提高中奖概率。本工具仅用于历史数据的统计分析，结果不构成投注建议，请理性购彩。",
+        );
     }
 
-    /* ---------------- 核对 ---------------- */
+    fn run_predict(&mut self) {
+        let t = std::time::Instant::now();
+        let opts = PredictOpts {
+            strategy: self.strategy,
+            window: self.window,
+            count: self.count,
+            seed: 0,
+            filters: engine::Filters::default(),
+        };
+        let r = engine::predict(&self.draws, &opts);
+        self.predict_ms = t.elapsed().as_secs_f64() * 1000.0;
+        self.predict = Some(r);
+    }
+
+    /* ======================= 页签二：验票 ======================= */
 
     fn page_check(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
+        let target = self.draws.get(self.ck_target).cloned();
 
-        let target = self.ck_target.clone().or_else(|| self.latest().cloned());
-        if let Some(t) = &target {
-            theme::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    theme::note(ui, &format!("第 {} 期开奖", t.issue), theme::INK, 14.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        theme::note(ui, &t.date, theme::SUB, 11.5);
-                    });
-                });
-                ui.add_space(9.0);
-                theme::balls_row(ui, &t.f, &t.b, 15.0, None);
-            });
-        }
-        ui.add_space(10.0);
-
-        // 选号网格
+        // ---- 核对期号 ----
         theme::card(ui, |ui| {
+            let mut pick_open = false;
             ui.horizontal(|ui| {
-                theme::note(ui, "前区", theme::INK, 14.0);
-                theme::note(ui, &format!("已选 {}/5", self.ck_front.len()), theme::SUB, 11.5);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("核对期号").size(11.0).color(theme::SUB));
+                    ui.label(
+                        egui::RichText::new(
+                            target.as_ref().map(|d| d.issue.clone()).unwrap_or_else(|| "—".into()),
+                        )
+                        .size(16.0)
+                        .color(theme::INK),
+                    );
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if theme::ghost_button(ui, "清空", Some(56.0)).clicked() {
-                        self.ck_front.clear();
-                        self.ck_back.clear();
-                        self.ck_outcome = None;
-                    }
+                    let r = ui.allocate_ui(Vec2::new(58.0, 28.0), |ui| {
+                        theme::ghost(ui, "换期", 28.0, true)
+                    });
+                    pick_open = r.inner.clicked();
                 });
             });
-            ui.add_space(9.0);
-            number_grid(ui, FM as u8, &mut self.ck_front, FRONT_PICK, theme::RED, theme::RED_SOFT);
-
-            ui.add_space(13.0);
-            ui.horizontal(|ui| {
-                theme::note(ui, "后区", theme::INK, 14.0);
-                theme::note(ui, &format!("已选 {}/2", self.ck_back.len()), theme::SUB, 11.5);
-            });
-            ui.add_space(9.0);
-            number_grid(ui, BM as u8, &mut self.ck_back, BACK_PICK, theme::BLUE, theme::BLUE_SOFT);
+            ui.add_space(11.0);
+            if let Some(d) = &target {
+                theme::balls_row(ui, &d.f, &d.b, 29.0, None);
+                ui.add_space(10.0);
+                let note = format!(
+                    "开奖日期 {} · 前区 5 个号 + 后区 2 个号",
+                    d.date
+                );
+                theme::para(ui, &note, 11.5, theme::SUB, 1.5);
+            }
+            if pick_open {
+                // 换期：往前一期
+                if self.ck_target > 0 {
+                    self.ck_target -= 1;
+                    self.ck_outcome = None;
+                }
+            }
         });
 
-        ui.add_space(14.0);
-        let ready = self.ck_front.len() == FRONT_PICK && self.ck_back.len() == BACK_PICK;
-        let resp = theme::primary_button(ui, if ready { "核对" } else { "请选择 5 + 2 个号码" });
-        if resp.clicked() && ready {
-            if let Some(t) = &target {
-                let mut f = [0u8; 5];
-                f.copy_from_slice(&self.ck_front);
-                let mut b = [0u8; 2];
-                b.copy_from_slice(&self.ck_back);
-                f.sort_unstable();
-                b.sort_unstable();
-                self.ck_outcome = Some(ticket::check(&f, &b, t));
+        // ---- 单式 / 复式，不追加 / 追加 ----
+        ui.horizontal(|ui| {
+            ui.add_space(1.0);
+            if let Some(i) = theme::seg(ui, &["单式", "复式"], if self.ck_multi { 1 } else { 0 }, false) {
+                self.ck_multi = i == 1;
+                if !self.ck_multi {
+                    self.ck_front.truncate(FRONT_PICK);
+                    self.ck_back.truncate(BACK_PICK);
+                }
             }
-        }
+            ui.add_space(8.0);
+            if let Some(i) = theme::seg(ui, &["不追加", "追加"], if self.ck_extra { 1 } else { 0 }, false) {
+                self.ck_extra = i == 1;
+            }
+        });
+        ui.add_space(12.0);
 
-        ui.add_space(14.0);
-        if let Some(o) = &self.ck_outcome {
-            let win = o.is_win();
-            let level_name = o.name();
-            let hit_text = o.hit_text();
-            let amount = o.amount();
-            let f_mask = o.front_mask;
-            let b_mask = o.back_mask;
-            let (f, b) = (self.ck_front.clone(), self.ck_back.clone());
+        // ---- 号码盘 ----
+        theme::card(ui, |ui| {
+            let fmax = if self.ck_multi { 35 } else { FRONT_PICK };
+            let bmax = if self.ck_multi { 12 } else { BACK_PICK };
 
-            theme::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    theme::note(
-                        ui,
-                        if win { "中奖" } else { "未中奖" },
-                        if win { theme::RED } else { theme::SUB },
-                        16.0,
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        theme::note(ui, level_name, if win { theme::RED } else { theme::SUB }, 14.0);
-                    });
-                });
-                ui.add_space(10.0);
-                let mut mask = f_mask.to_vec();
-                mask.extend_from_slice(&b_mask);
-                theme::balls_row(ui, &f, &b, 15.0, Some(&mask));
-                ui.add_space(10.0);
-                theme::note(ui, &format!("命中 前区 {} + 后区 {}", hit_text.split(" + ").next().unwrap_or("0"), hit_text.split(" + ").nth(1).unwrap_or("0")), theme::INK2, 13.0);
-                if let Some(amt) = amount {
-                    ui.add_space(4.0);
-                    theme::note(ui, &format!("固定奖金 ¥{}", amt), theme::RED, 15.0);
-                } else if win {
-                    ui.add_space(4.0);
-                    theme::note(ui, "浮动奖金，以官方公告为准", theme::SUB, 11.5);
+            pk_header(ui, "前区", self.ck_front.len(), FRONT_PICK);
+            if pick_grid(ui, 1, FM as u8, 7, &mut self.ck_front, fmax, false) {
+                self.ck_outcome = None;
+            }
+            ui.add_space(15.0);
+            pk_header(ui, "后区", self.ck_back.len(), BACK_PICK);
+            if pick_grid(ui, 1, BM as u8, 6, &mut self.ck_back, bmax, true) {
+                self.ck_outcome = None;
+            }
+            ui.add_space(12.0);
+            let foot = if self.ck_multi {
+                format!("复式：前区选 {} 个、后区选 {} 个，按组合数计注", self.ck_front.len(), self.ck_back.len())
+            } else {
+                format!("单式：前区 {} / {}，后区 {} / {}", self.ck_front.len(), FRONT_PICK, self.ck_back.len(), BACK_PICK)
+            };
+            theme::para(ui, &foot, 11.5, theme::SUB, 1.5);
+        });
+
+        // ---- 操作 ----
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 8.0) * 0.5;
+            ui.allocate_ui(Vec2::new(w, 40.0), |ui| {
+                if theme::ghost(ui, "拍照对照", 40.0, false).clicked() {
+                    // 相机与照片导入尚未接入
                 }
             });
-            ui.add_space(20.0);
+            ui.add_space(8.0);
+            ui.allocate_ui(Vec2::new(w, 40.0), |ui| {
+                if theme::ghost(ui, "清空", 40.0, false).clicked() {
+                    self.ck_front.clear();
+                    self.ck_back.clear();
+                    self.ck_outcome = None;
+                }
+            });
+        });
+        ui.add_space(12.0);
+
+        // ---- 核对 ----
+        let resp = theme::primary(ui, "核对是否中奖", Some(theme::icon_check));
+        if resp.clicked() {
+            self.run_check();
         }
+        ui.add_space(14.0);
+
+        // ---- 结果 ----
+        if let (Some(o), Some(t)) = (self.ck_outcome.clone(), target.clone()) {
+            check_result(ui, &o, &t);
+        }
+
+        theme::sec_title(ui, "我的彩票");
+        theme::card(ui, |ui| {
+            theme::para(ui, "还没有保存的彩票", 12.5, theme::SUB, 1.5);
+        });
+
+        theme::disclaimer(
+            ui,
+            "验票结果按官方奖级规则本地计算，仅供核对参考；实际兑奖以体彩终端与官方公告为准。开奖号码来自内置历史数据。",
+        );
     }
 
-    /* ---------------- 分析 ---------------- */
+    fn run_check(&mut self) {
+        if self.ck_front.len() < FRONT_PICK || self.ck_back.len() < BACK_PICK {
+            self.say("号码不够：前区 5 个、后区 2 个");
+            return;
+        }
+        let Some(t) = self.draws.get(self.ck_target).cloned() else {
+            self.say("没有可核对的期次");
+            return;
+        };
+        // 单式取前 5/2，复式取全部（判奖看最优组合）
+        let o = ticket::check(&self.ck_front, &self.ck_back, &t);
+        self.ck_outcome = Some(o);
+    }
+
+    /* ======================= 页签三：分析 ======================= */
 
     fn page_analysis(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-
         let st = &self.stats;
-        let (n, sum_mean, span_mean, q10, q90) =
-            (st.n, st.sum_mean, st.span_mean, st.sum_q10, st.sum_q90);
 
+        // ---- 前区热度 ----
         theme::card(ui, |ui| {
-            theme::note(ui, "近 100 期概览", theme::INK, 14.0);
+            card_head(ui, "前区热度（1–35）", &format!("近 {} 期", st.n));
+            ui.add_space(12.0);
+            heat_grid(ui, 1, FM as u8, 7, &st.freq_f, &st.omit_f, false);
             ui.add_space(10.0);
+            // 图例
             ui.horizontal(|ui| {
-                stat_block(ui, "样本", &format!("{}", n), theme::INK);
-                stat_block(ui, "和值均值", &format!("{:.1}", sum_mean), theme::INK);
-                stat_block(ui, "跨度均值", &format!("{:.1}", span_mean), theme::INK);
+                let (r, _) = ui.allocate_exact_size(Vec2::new(52.0, 7.0), Sense::hover());
+                theme::gradient(
+                    ui.painter(),
+                    r,
+                    Color32::from_rgb(0xF4, 0xF1, 0xF0),
+                    theme::RED,
+                    false,
+                );
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("冷").size(10.5).color(theme::SUB));
+                ui.label(egui::RichText::new("热").size(10.5).color(theme::SUB));
+                ui.add_space(10.0);
+                let (d, _) = ui.allocate_exact_size(Vec2::splat(9.0), Sense::hover());
+                ui.painter().circle_filled(d.center(), 4.5, Color32::from_rgb(0xD8, 0xDC, 0xE3));
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("角标为当前遗漏").size(10.5).color(theme::SUB));
             });
-            ui.add_space(10.0);
-            theme::note(
-                ui,
-                &format!("和值集中区间 {:.0} ~ {:.0}（10%~90% 分位）", q10, q90),
-                theme::SUB,
-                11.5,
-            );
         });
 
-        ui.add_space(10.0);
-
-        // 热号 TOP
-        let mut freq: Vec<(usize, u32)> = (1..=FM).map(|v| (v, st.freq_f[v])).collect();
-        freq.sort_by(|a, b| b.1.cmp(&a.1));
-        let top: Vec<(usize, u32)> = freq.iter().take(8).cloned().collect();
-        let max_freq = top.first().map(|x| x.1).unwrap_or(1).max(1);
-
+        // ---- 后区热度 ----
         theme::card(ui, |ui| {
-            theme::note(ui, "热号排行", theme::INK, 14.0);
+            card_head(ui, "后区热度（1–12）", "");
+            ui.add_space(12.0);
+            heat_grid(ui, 1, BM as u8, 6, &st.freq_b, &st.omit_b, true);
+        });
+
+        // ---- 和值分布 ----
+        theme::card(ui, |ui| {
+            card_head(ui, "前区和值分布", &format!("均值 {:.1}", st.sum_mean));
             ui.add_space(10.0);
-            for (num, c) in &top {
-                bar_row(ui, *num as u8, *c, max_freq, theme::RED, "次");
+            histogram(ui, &st.sums_sorted);
+        });
+
+        // ---- 奇偶结构 ----
+        theme::card(ui, |ui| {
+            card_head(ui, "奇偶结构", "");
+            ui.add_space(12.0);
+            let total: u32 = st.odd_dist.iter().sum();
+            let max = *st.odd_dist.iter().max().unwrap_or(&1);
+            for (i, &v) in st.odd_dist.iter().enumerate() {
+                bar_row(
+                    ui,
+                    &format!("{} : {}", i, FRONT_PICK - i),
+                    v,
+                    max,
+                    &format!("{:.0}%", pct(v, total)),
+                    false,
+                );
             }
         });
 
-        ui.add_space(10.0);
-
-        // 遗漏排行
-        let mut omit: Vec<(usize, usize)> = (1..=FM).map(|v| (v, st.omit_f[v])).collect();
-        omit.sort_by(|a, b| b.1.cmp(&a.1));
-        let top_omit: Vec<(usize, usize)> = omit.iter().take(8).cloned().collect();
-        let max_omit = top_omit.first().map(|x| x.1).unwrap_or(1).max(1);
-
+        // ---- 大小结构 ----
         theme::card(ui, |ui| {
-            theme::note(ui, "遗漏排行", theme::INK, 14.0);
-            ui.add_space(10.0);
-            for (num, c) in &top_omit {
-                bar_row(ui, *num as u8, *c as u32, max_omit as u32, theme::BLUE, "期");
+            card_head(ui, "大小结构（1–17 / 18–35）", "");
+            ui.add_space(12.0);
+            let total: u32 = st.big_dist.iter().sum();
+            let max = *st.big_dist.iter().max().unwrap_or(&1);
+            for (i, &v) in st.big_dist.iter().enumerate() {
+                bar_row(
+                    ui,
+                    &format!("{} 大", i),
+                    v,
+                    max,
+                    &format!("{:.0}%", pct(v, total)),
+                    true,
+                );
             }
         });
 
-        ui.add_space(10.0);
-
-        // 和值分布
-        let sums = st.sums_sorted.clone();
+        // ---- 五分区 ----
         theme::card(ui, |ui| {
-            theme::note(ui, "和值分布", theme::INK, 14.0);
-            ui.add_space(10.0);
-            histogram(ui, &sums);
+            card_head(ui, "五分区分布", "");
+            ui.add_space(12.0);
+            let max = *st.zone_total.iter().max().unwrap_or(&1);
+            let names = ["1–7", "8–14", "15–21", "22–28", "29–35"];
+            let total: u32 = st.zone_total.iter().sum();
+            for (i, &v) in st.zone_total.iter().enumerate() {
+                bar_row(
+                    ui,
+                    names[i],
+                    v,
+                    max,
+                    &format!("{:.0}%", pct(v, total)),
+                    false,
+                );
+            }
         });
-        ui.add_space(20.0);
+
+        // ---- 遗漏榜 ----
+        theme::card(ui, |ui| {
+            card_head(ui, "遗漏榜 · 前区", "距离上次出现");
+            ui.add_space(12.0);
+            let mut idx: Vec<(usize, usize)> = (1..=FM)
+                .map(|n| (n, st.omit_f.get(n).copied().unwrap_or(0)))
+                .collect();
+            idx.sort_by(|a, b| b.1.cmp(&a.1));
+            let top = (idx.len().min(8)).max(1);
+            let max = idx.first().map(|x| x.1).unwrap_or(1).max(1);
+            for (k, (n, om)) in idx.iter().take(top).enumerate() {
+                omit_row(ui, *n as u8, *om, max, k > 0);
+            }
+        });
+
+        theme::disclaimer(
+            ui,
+            "遗漏值只描述历史，不改变任何号码的下一期出现概率。理论上每个前区号码每期出现概率恒为 5/35 ≈ 14.29%。",
+        );
     }
 
-    /* ---------------- 历史 ---------------- */
+    /* ======================= 页签四：历史 ======================= */
 
     fn page_history(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        let total = self.draws.len();
-        let take = self.hist_rows.min(total);
-        let rows: Vec<(String, String, [u8; 5], [u8; 2])> = self
+        // ---- 搜索框 ----
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 44.0), Sense::hover());
+        ui.painter().rect_filled(rect, 13.0, theme::CARD);
+        ui.painter().rect_stroke(
+            rect,
+            13.0,
+            Stroke::new(1.0, theme::LINE),
+            egui::StrokeKind::Inside,
+        );
+        let icon = Rect::from_center_size(
+            Pos2::new(rect.left() + 22.0, rect.center().y),
+            Vec2::splat(17.0),
+        );
+        let ip = ui.painter().clone();
+        let k = icon.width() / 24.0;
+        ip.circle_stroke(
+            Pos2::new(icon.left() + 11.0 * k, icon.top() + 11.0 * k),
+            6.5 * k,
+            Stroke::new(2.0 * k, theme::SUB),
+        );
+        ip.line_segment(
+            [
+                Pos2::new(icon.left() + 16.0 * k, icon.top() + 16.0 * k),
+                Pos2::new(icon.left() + 20.5 * k, icon.top() + 20.5 * k),
+            ],
+            Stroke::new(2.0 * k, theme::SUB),
+        );
+
+        let edit_rect = Rect::from_min_max(
+            Pos2::new(rect.left() + 40.0, rect.top() + 6.0),
+            Pos2::new(rect.right() - 10.0, rect.bottom() - 6.0),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(edit_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.add(
+            egui::TextEdit::singleline(&mut self.query)
+                .hint_text(
+                    egui::RichText::new("搜索期号 / 号码，如 26123 或 13 18 19")
+                        .size(14.0)
+                        .color(Color32::from_rgb(0xAE, 0xB4, 0xBF)),
+                )
+                .desired_width(f32::INFINITY)
+                .frame(egui::Frame::NONE)
+                .text_color(theme::INK)
+                .font(egui::FontId::proportional(14.0)),
+        );
+        ui.add_space(10.0);
+
+        // ---- 过滤 ----
+        let q = self.query.trim().to_string();
+        let filtered: Vec<&Draw> = self
             .draws
             .iter()
             .rev()
-            .take(take)
-            .map(|d| (d.issue.clone(), d.date.clone(), d.f, d.b))
+            .filter(|d| {
+                if q.is_empty() {
+                    return true;
+                }
+                d.issue.contains(&q) || d.line_text().replace(' ', "").contains(&q.replace(' ', ""))
+            })
             .collect();
+        let shown = filtered.len().min(self.hist_rows);
 
-        for (issue, date, f, b) in rows {
-            theme::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    theme::note(ui, &format!("第 {} 期", issue), theme::INK, 13.5);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        theme::note(ui, &date, theme::SUB, 11.0);
-                    });
-                });
-                ui.add_space(7.0);
-                theme::balls_row(ui, &f, &b, 13.0, None);
+        // ---- 列表头 ----
+        ui.horizontal(|ui| {
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new(format!("共 {} 期", filtered.len()))
+                    .size(11.5)
+                    .color(theme::SUB),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(3.0);
+                ui.label(
+                    egui::RichText::new("点击查看期次特征")
+                        .size(11.5)
+                        .color(theme::SUB),
+                );
             });
-            ui.add_space(7.0);
+        });
+        ui.add_space(8.0);
+
+        // ---- 列表 ----
+        for d in filtered.iter().take(shown) {
+            hist_item(ui, d);
         }
 
-        if take < total {
-            ui.add_space(4.0);
-            if theme::ghost_button(ui, &format!("加载更多（还有 {} 期）", total - take), None).clicked() {
+        if shown < filtered.len() {
+            ui.add_space(12.0);
+            if theme::ghost(ui, "加载更多", 42.0, false).clicked() {
                 self.hist_rows += 30;
             }
         }
-        ui.add_space(20.0);
+        ui.add_space(8.0);
     }
 }
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let bg_rect = ui.max_rect();
-        ui.painter().rect_filled(bg_rect, 0.0, theme::BG);
-
-        ui.vertical(|ui| {
-            self.header(ui);
-            let scroll_h = (ui.available_height() - NAV_H).max(60.0);
-            egui::ScrollArea::vertical()
-                .max_height(scroll_h)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin::symmetric(14, 0))
-                        .show(ui, |ui| {
-                            self.body(ui);
-                        });
-                });
-            self.nav(ui);
-        });
-
-        // toast 淡出
-        if let Some((msg, left)) = &mut self.toast {
-            let dt = ui.ctx().input(|i| i.stable_dt).min(0.1) as f64;
-            *left -= dt;
-            let text = msg.clone();
-            let alpha = (*left / 0.6).clamp(0.0, 1.0);
-            let screen = ui.ctx().content_rect();
-            let pos = Pos2::new(screen.center().x, screen.bottom() - NAV_H - 34.0);
-            let galley = ui
-                .painter()
-                .layout_no_wrap(text, theme::font(13.0), Color32::WHITE);
-            let size = galley.size() + Vec2::new(26.0, 16.0);
-            let r = Rect::from_center_size(pos, size);
-            ui.ctx().layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("toast"),
-            ))
-            .rect_filled(r, 10.0, Color32::from_rgba_unmultiplied(0x1F, 0x24, 0x2C, (220.0 * alpha) as u8));
-            ui.ctx().layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("toast"),
-            ))
-            .galley(r.center() - size / 2.0 + Vec2::new(13.0, 8.0), galley, Color32::WHITE);
-            if *left <= 0.0 {
-                self.toast = None;
-            } else {
-                ui.ctx().request_repaint();
-            }
-        }
-    }
-}
-
-/* ============================ 小组件 ============================ */
+/* ============================ 局部组件 ============================ */
 
 fn short_date(d: &str) -> String {
-    // 2026-10-28 → 10-28
     if d.len() >= 10 {
         d[5..10].to_string()
     } else {
@@ -615,167 +806,646 @@ fn short_date(d: &str) -> String {
     }
 }
 
-fn tag_pill(ui: &mut egui::Ui, text: &str) {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), theme::font(11.0), theme::INK2);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(galley.size().x + 14.0, 20.0), Sense::hover());
-    ui.painter().rect_filled(rect, 6.0, theme::BG);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, theme::INK2);
+/// 期号 +1，保持 5 位
+fn next_issue(issue: &str) -> String {
+    issue
+        .parse::<u32>()
+        .map(|n| format!("{:05}", n + 1))
+        .unwrap_or_else(|_| "—".into())
 }
 
-/// 1..max 的号码选择网格，每行 7 个
-fn number_grid(ui: &mut egui::Ui, max: u8, sel: &mut Vec<u8>, limit: usize, active: Color32, active_bg: Color32) {
-    let cols = 7;
-    let gap = 6.0;
-    let w = ui.available_width();
-    let cell = ((w - gap * (cols as f32 - 1.0)) / cols as f32).min(44.0);
-    let rows = (max as f32 / cols as f32).ceil() as usize;
-
-    for r in 0..rows {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
-            for c in 0..cols {
-                let n = (r * cols + c + 1) as u8;
-                if n > max {
-                    break;
-                }
-                let (rect, resp) = ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
-                let on = sel.contains(&n);
-                let bg = if on { active_bg } else { theme::BG };
-                let fg = if on { active } else { theme::INK2 };
-                ui.painter().rect_filled(rect, cell * 0.28, bg);
-                if !on {
-                    ui.painter().rect_stroke(
-                        rect,
-                        cell * 0.28,
-                        Stroke::new(1.0, theme::LINE),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                ui.painter().text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    format!("{:02}", n),
-                    theme::font(cell * 0.38),
-                    fg,
-                );
-                if resp.clicked() {
-                    if on {
-                        sel.retain(|&v| v != n);
-                    } else if sel.len() < limit {
-                        sel.push(n);
-                        sel.sort_unstable();
-                    }
-                }
-            }
-        });
-        ui.add_space(gap);
+fn count_idx(c: usize) -> usize {
+    match c {
+        1 => 0,
+        3 => 1,
+        5 => 2,
+        _ => 3,
     }
 }
 
-fn stat_block(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
-    let w = ui.available_width() / 3.0;
-    ui.allocate_ui_with_layout(
-        Vec2::new(w, 44.0),
-        egui::Layout::top_down(egui::Align::LEFT),
-        |ui| {
-            theme::note(ui, value, color, 18.0);
-            theme::note(ui, label, theme::SUB, 11.0);
-        },
-    );
+fn pct(v: u32, total: u32) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        v as f64 * 100.0 / total as f64
+    }
 }
 
-fn bar_row(ui: &mut egui::Ui, num: u8, value: u32, max: u32, color: Color32, unit: &str) {
+/// 卡片标题行：左侧标题，右侧浅灰小字
+fn card_head(ui: &mut egui::Ui, title: &str, right: &str) {
     let w = ui.available_width();
-    let h = 22.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), Sense::hover());
     let p = ui.painter();
+    p.text(r.left_center(), Align2::LEFT_CENTER, title, theme::bold(14.5), theme::INK);
+    if !right.is_empty() {
+        p.text(r.right_center(), Align2::RIGHT_CENTER, right, theme::font(11.5), theme::SUB);
+    }
+}
 
-    // 号码
+/// 推演结果里的一注
+fn pick_card(ui: &mut egui::Ui, s: &engine::PickSet) {
+    let w = ui.available_width();
+    let start = ui.cursor().min;
+    egui::Frame::new()
+        .fill(theme::CARD)
+        .stroke(Stroke::new(1.0, theme::LINE))
+        .corner_radius(15.0)
+        .inner_margin(egui::Margin::symmetric(13, 12))
+        .show(ui, |ui| {
+            ui.set_width(w - 26.0);
+            ui.horizontal(|ui| {
+                // 名次徽标
+                let (rk, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
+                let bg = if s.rank == 1 { theme::RED } else { theme::SEG_BG };
+                let fg = if s.rank == 1 { Color32::WHITE } else { theme::SUB };
+                ui.painter().rect_filled(rk, 6.0, bg);
+                ui.painter().text(
+                    rk.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{}", s.rank),
+                    theme::bold(11.0),
+                    fg,
+                );
+                ui.add_space(1.0);
+                theme::balls_row(ui, &s.f, &s.b, 26.0, None);
+            });
+            ui.add_space(9.0);
+            // 特征行 + 契合度
+            ui.horizontal(|ui| {
+                ui.add_space(1.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "和值 {} · 跨度 {} · 奇偶 {}:{} · 大小 {}:{}",
+                        s.sum,
+                        s.span,
+                        s.odd_f,
+                        FRONT_PICK as u8 - s.odd_f,
+                        s.big_f,
+                        FRONT_PICK as u8 - s.big_f
+                    ))
+                    .size(11.5)
+                    .color(theme::SUB),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let txt = format!("{}", s.score.round() as i32);
+                    let g = ui
+                        .painter()
+                        .layout_no_wrap(txt.clone(), theme::bold(12.0), theme::RED);
+                    let (r, _) = ui.allocate_exact_size(
+                        Vec2::new(g.size().x + 14.0, 20.0),
+                        Sense::hover(),
+                    );
+                    ui.painter().rect_filled(r, 7.0, theme::RED_SOFT);
+                    ui.painter()
+                        .text(r.center(), Align2::CENTER_CENTER, txt, theme::bold(12.0), theme::RED);
+                });
+            });
+            if !s.tags.is_empty() {
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    for t in &s.tags {
+                        let g = ui.painter().layout_no_wrap(
+                            t.to_string(),
+                            theme::bold(10.5),
+                            theme::INK2,
+                        );
+                        let (r, _) = ui.allocate_exact_size(
+                            Vec2::new(g.size().x + 14.0, g.size().y + 4.0),
+                            Sense::hover(),
+                        );
+                        ui.painter().rect_filled(r, 6.0, theme::CHIP_BG);
+                        ui.painter().text(
+                            r.center(),
+                            Align2::CENTER_CENTER,
+                            *t,
+                            theme::bold(10.5),
+                            theme::INK2,
+                        );
+                    }
+                });
+            }
+        });
+    let end = ui.cursor().min;
+    let _ = (start, end);
+    ui.add_space(9.0);
+}
+
+/// 号码盘小标题：前区/后区 + 已选计数
+fn pk_header(ui: &mut egui::Ui, name: &str, sel: usize, need: usize) {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), Sense::hover());
+    let p = ui.painter();
+    p.text(r.left_center(), Align2::LEFT_CENTER, name, theme::bold(13.0), theme::INK2);
     p.text(
-        Pos2::new(rect.left(), rect.center().y),
+        r.right_center(),
+        Align2::RIGHT_CENTER,
+        format!("已选 {} / {}", sel, need),
+        theme::font(11.5),
+        theme::SUB,
+    );
+    ui.add_space(9.0);
+}
+
+/// 号码网格。返回 true 表示选择发生变化。
+fn pick_grid(
+    ui: &mut egui::Ui,
+    from: u8,
+    to: u8,
+    cols: usize,
+    sel: &mut Vec<u8>,
+    max: usize,
+    blue: bool,
+) -> bool {
+    let n = (to - from + 1) as usize;
+    let rows = (n + cols - 1) / cols;
+    let gap = 5.0;
+    let w = ui.available_width();
+    let cell = (w - gap * (cols - 1) as f32) / cols as f32;
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(w, cell * rows as f32 + gap * (rows as f32 - 1.0)),
+        Sense::hover(),
+    );
+    let p = ui.painter().clone();
+    let mut changed = false;
+
+    for i in 0..n {
+        let num = from + i as u8;
+        let r = i / cols;
+        let c = i % cols;
+        let cr = Rect::from_min_size(
+            Pos2::new(rect.left() + (cell + gap) * c as f32, rect.top() + (cell + gap) * r as f32),
+            Vec2::splat(cell),
+        );
+        let on = sel.contains(&num);
+        let resp = ui.interact(cr, ui.id().with(("pk", blue, num)), Sense::click());
+        if resp.clicked() {
+            changed = true;
+            if on {
+                sel.retain(|x| *x != num);
+            } else if sel.len() < max {
+                sel.push(num);
+                sel.sort_unstable();
+            }
+        }
+        if on {
+            theme::draw_ball(&p, cr.center(), cell, num, !blue, false);
+        } else {
+            p.circle_filled(cr.center(), cell * 0.5, theme::CHIP_BG);
+            p.text(
+                cr.center(),
+                Align2::CENTER_CENTER,
+                format!("{:02}", num),
+                theme::bold(13.5),
+                theme::INK2,
+            );
+        }
+    }
+    changed
+}
+
+/// 验票结果卡
+fn check_result(ui: &mut egui::Ui, o: &ticket::Outcome, t: &Draw) {
+    let win = o.is_win();
+    let w = ui.available_width();
+    egui::Frame::new()
+        .fill(if win {
+            Color32::from_rgb(0xFF, 0xEE, 0xEA)
+        } else {
+            theme::CARD
+        })
+        .stroke(Stroke::new(
+            1.0,
+            if win {
+                Color32::from_rgb(0xFB, 0xD9, 0xD3)
+            } else {
+                theme::LINE
+            },
+        ))
+        .corner_radius(theme::CARD_R)
+        .inner_margin(egui::Margin::symmetric(16, 16))
+        .show(ui, |ui| {
+            ui.set_width(w - 32.0);
+            // 标签行
+            let (r, _) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), 18.0),
+                Sense::hover(),
+            );
+            ui.painter().text(
+                r.left_center(),
+                Align2::LEFT_CENTER,
+                if win { "恭喜中奖" } else { "未中奖" },
+                theme::bold(12.5),
+                if win { theme::RED } else { theme::SUB },
+            );
+            ui.add_space(6.0);
+            // 大奖级
+            let (r2, _) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), if win { 38.0 } else { 30.0 }),
+                Sense::hover(),
+            );
+            ui.painter().text(
+                r2.left_center(),
+                Align2::LEFT_CENTER,
+                o.name(),
+                theme::bold(if win { 30.0 } else { 22.0 }),
+                if win { theme::RED } else { theme::INK },
+            );
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(o.hit_text())
+                    .size(12.0)
+                    .color(theme::SUB),
+            );
+
+            // 命中分布
+            ui.add_space(12.0);
+            hit_row(ui, "开奖", &t.f, &t.b, None, None);
+            ui.add_space(8.0);
+            hit_row(
+                ui,
+                "命中",
+                &t.f,
+                &t.b,
+                Some(&o.front_mask),
+                Some(&o.back_mask),
+            );
+
+            if let Some(amt) = o.amount() {
+                ui.add_space(14.0);
+                theme::dashed_line(ui);
+                ui.add_space(9.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("参考奖金")
+                            .size(12.5)
+                            .color(theme::INK2),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("¥{}", amt))
+                                .size(17.0)
+                                .color(theme::RED),
+                        );
+                    });
+                });
+            }
+        });
+    ui.add_space(14.0);
+}
+
+/// 一行「开奖 / 命中」球
+fn hit_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    f: &[u8],
+    b: &[u8],
+    fm: Option<&[bool; 5]>,
+    bm: Option<&[bool; 2]>,
+) {
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(Vec2::new(30.0, 26.0), Sense::hover());
+        ui.painter().text(
+            r.left_center(),
+            Align2::LEFT_CENTER,
+            label,
+            theme::font(11.0),
+            theme::SUB,
+        );
+        let mut all: Vec<bool> = Vec::new();
+        if let Some(m) = fm {
+            all.extend_from_slice(m);
+        }
+        if let Some(m) = bm {
+            all.extend_from_slice(m);
+        }
+        let mask = if all.is_empty() { None } else { Some(all.as_slice()) };
+        theme::balls_row(ui, f, b, 26.0, mask);
+    });
+}
+
+/// 分析页热度格
+fn heat_grid(
+    ui: &mut egui::Ui,
+    from: u8,
+    to: u8,
+    cols: usize,
+    freq: &[u32],
+    omit: &[usize],
+    blue: bool,
+) {
+    let n = (to - from + 1) as usize;
+    let rows = (n + cols - 1) / cols;
+    let gap = 5.0;
+    let w = ui.available_width();
+    let cell = (w - gap * (cols - 1) as f32) / cols as f32;
+    let h = cell * 0.92;
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(w, h * rows as f32 + gap * (rows as f32 - 1.0)),
+        Sense::hover(),
+    );
+    let p = ui.painter().clone();
+
+    // 归一化频率
+    let vals: Vec<f64> = (from..=to)
+        .map(|i| freq.get(i as usize).copied().unwrap_or(0) as f64)
+        .collect();
+    let max = vals.iter().cloned().fold(1.0, f64::max);
+    let min = vals.iter().cloned().fold(f64::MAX, f64::min);
+
+    let cold = Color32::from_rgb(0xF4, 0xF1, 0xF0);
+    let hot = if blue { theme::BLUE } else { theme::RED };
+
+    for i in 0..n {
+        let num = from + i as u8;
+        let r = i / cols;
+        let c = i % cols;
+        let cr = Rect::from_min_size(
+            Pos2::new(rect.left() + (cell + gap) * c as f32, rect.top() + (h + gap) * r as f32),
+            Vec2::new(cell, h),
+        );
+        let t = if max > min {
+            ((vals[i] - min) / (max - min)) as f32
+        } else {
+            0.5
+        };
+        let bg = cold.lerp_to_gamma(hot, 0.12 + t * 0.82);
+        p.rect_filled(cr, 9.0, bg);
+        // 深色底用白字，浅色底用深字
+        let fg = if t > 0.55 {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(0x33, 0x38, 0x42)
+        };
+        p.text(
+            Pos2::new(cr.center().x, cr.center().y + 1.0),
+            Align2::CENTER_CENTER,
+            format!("{:02}", num),
+            theme::bold(13.0),
+            fg,
+        );
+        // 右上角遗漏角标
+        let om = omit.get(num as usize).copied().unwrap_or(0);
+        if om > 0 {
+            p.text(
+                Pos2::new(cr.right() - 3.0, cr.top() + 2.0),
+                Align2::RIGHT_TOP,
+                format!("{}", om),
+                theme::bold(8.0),
+                fg.gamma_multiply(0.62),
+            );
+        }
+    }
+}
+
+/// 一条横向柱：标签 + 槽 + 数值
+fn bar_row(ui: &mut egui::Ui, label: &str, v: u32, max: u32, value: &str, blue: bool) {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), Sense::hover());
+    let p = ui.painter();
+    let cy = r.center().y;
+    p.text(
+        Pos2::new(r.left(), cy),
+        Align2::LEFT_CENTER,
+        label,
+        theme::bold(12.0),
+        theme::INK2,
+    );
+    let bar_l = r.left() + 62.0;
+    let bar_r = r.right() - 48.0;
+    if bar_r > bar_l {
+        let bar = Rect::from_min_max(Pos2::new(bar_l, cy - 4.5), Pos2::new(bar_r, cy + 4.5));
+        let ratio = if max == 0 { 0.0 } else { v as f32 / max as f32 };
+        let (c0, c1) = if blue {
+            (Color32::from_rgb(0x8A, 0xB0, 0xFF), theme::BLUE)
+        } else {
+            (Color32::from_rgb(0xF2, 0x7C, 0x6E), theme::RED)
+        };
+        theme::hbar(p, bar, ratio, c0, c1);
+    }
+    p.text(
+        Pos2::new(r.right(), cy),
+        Align2::RIGHT_CENTER,
+        value,
+        theme::font(11.5),
+        theme::SUB,
+    );
+    ui.add_space(8.0);
+}
+
+/// 遗漏榜一行
+fn omit_row(ui: &mut egui::Ui, num: u8, omit: usize, max: usize, divider: bool) {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 30.0), Sense::hover());
+    let p = ui.painter();
+    let cy = r.center().y;
+    if divider {
+        p.line_segment(
+            [Pos2::new(r.left(), r.top()), Pos2::new(r.right(), r.top())],
+            Stroke::new(1.0, theme::CHIP_BG),
+        );
+    }
+    p.text(
+        Pos2::new(r.left(), cy),
         Align2::LEFT_CENTER,
         format!("{:02}", num),
-        theme::font(12.5),
+        theme::bold(13.0),
         theme::INK,
     );
-
-    // 进度条
-    let bar_left = rect.left() + 34.0;
-    let bar_right = rect.right() - 52.0;
-    let bar = Rect::from_min_max(
-        Pos2::new(bar_left, rect.center().y - 4.0),
-        Pos2::new(bar_right, rect.center().y + 4.0),
-    );
-    p.rect_filled(bar, 4.0, theme::BG);
-    let ratio = if max > 0 { value as f32 / max as f32 } else { 0.0 };
-    let fill = Rect::from_min_max(
-        bar.min,
-        Pos2::new(bar_left + (bar_right - bar_left) * ratio.clamp(0.0, 1.0), bar.max.y),
-    );
-    p.rect_filled(fill, 4.0, color.gamma_multiply(0.85));
-
-    // 数值
     p.text(
-        Pos2::new(rect.right(), rect.center().y),
-        Align2::RIGHT_CENTER,
-        format!("{} {}", value, unit),
+        Pos2::new(r.left() + 26.0, cy),
+        Align2::LEFT_CENTER,
+        "遗漏",
         theme::font(12.0),
         theme::SUB,
     );
+    let txt = format!("{} 期", omit);
+    let g = p.layout_no_wrap(txt.clone(), theme::bold(13.5), theme::RED);
+    p.galley(
+        Pos2::new(r.left() + 56.0, cy - g.size().y * 0.5),
+        g,
+        theme::RED,
+    );
+    // 右侧比例条
+    let bar_r = r.right();
+    let bar_l = bar_r - 86.0;
+    let bar = Rect::from_min_max(Pos2::new(bar_l, cy - 3.0), Pos2::new(bar_r, cy + 3.0));
+    let ratio = if max == 0 { 0.0 } else { omit as f32 / max as f32 };
+    theme::hbar(
+        p,
+        bar,
+        ratio,
+        Color32::from_rgb(0xFF, 0xB4, 0xAC),
+        theme::RED,
+    );
 }
 
-/// 和值直方图
+/// 和值直方图（纯手绘，不依赖 canvas）
 fn histogram(ui: &mut egui::Ui, sums: &[f64]) {
+    let w = ui.available_width();
+    let h = 132.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+    let p = ui.painter().clone();
     if sums.is_empty() {
-        theme::note(ui, "暂无数据", theme::SUB, 12.0);
         return;
     }
-    let w = ui.available_width();
-    let h = 120.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
-    let p = ui.painter();
-
-    let lo = sums.first().copied().unwrap_or(0.0);
-    let hi = sums.last().copied().unwrap_or(0.0);
-    let bins = 22usize;
-    let step = ((hi - lo) / bins as f64).max(1.0);
+    // 分成 20 个桶
+    let lo = sums.iter().cloned().fold(f64::MAX, f64::min).floor();
+    let hi = sums.iter().cloned().fold(f64::MIN, f64::max).ceil();
+    let bins = 20usize;
+    let span = (hi - lo).max(1.0);
     let mut counts = vec![0u32; bins];
     for &s in sums {
-        let idx = (((s - lo) / step).floor() as usize).min(bins - 1);
-        counts[idx] += 1;
+        let k = (((s - lo) / span) * bins as f64).floor() as usize;
+        counts[k.min(bins - 1)] += 1;
     }
-    let max_c = counts.iter().copied().max().unwrap_or(1).max(1);
+    let max = counts.iter().copied().max().unwrap_or(1).max(1);
 
-    let plot = Rect::from_min_max(
-        Pos2::new(rect.left(), rect.top() + 6.0),
-        Pos2::new(rect.right(), rect.bottom() - 20.0),
-    );
-    let bw = plot.width() / bins as f32;
+    let base = rect.bottom() - 16.0;
+    let bw = rect.width() / bins as f32;
     for (i, &c) in counts.iter().enumerate() {
-        let bh = plot.height() * (c as f32 / max_c as f32);
-        let bar = Rect::from_min_max(
-            Pos2::new(plot.left() + bw * i as f32 + 1.0, plot.bottom() - bh),
-            Pos2::new(plot.left() + bw * (i as f32 + 1.0) - 1.0, plot.bottom()),
+        let bh = (c as f32 / max as f32) * (base - rect.top() - 6.0);
+        let x = rect.left() + bw * i as f32 + 1.0;
+        let r = Rect::from_min_max(
+            Pos2::new(x, base - bh),
+            Pos2::new(x + bw - 2.0, base),
         );
-        p.rect_filled(bar, 2.0, theme::RED.gamma_multiply(0.55 + 0.4 * (c as f32 / max_c as f32)));
+        let t = i as f32 / (bins - 1) as f32;
+        theme::gradient(
+            &p,
+            r,
+            Color32::from_rgb(0xF2, 0x7C, 0x6E).lerp_to_gamma(theme::RED, t),
+            Color32::from_rgb(0xE0, 0x45, 0x3C).lerp_to_gamma(Color32::from_rgb(0xAE, 0x1C, 0x16), t),
+            true,
+        );
     }
+    // 底轴
     p.line_segment(
-        [plot.left_bottom(), plot.right_bottom()],
+        [
+            Pos2::new(rect.left(), base),
+            Pos2::new(rect.right(), base),
+        ],
         Stroke::new(1.0, theme::LINE),
     );
-
     p.text(
-        Pos2::new(rect.left(), rect.bottom()),
+        Pos2::new(rect.left(), rect.bottom() - 1.0),
         Align2::LEFT_BOTTOM,
-        format!("{:.0}", lo),
+        format!("{}", lo as i32),
         theme::font(10.5),
         theme::SUB,
     );
     p.text(
-        Pos2::new(rect.right(), rect.bottom()),
+        Pos2::new(rect.right(), rect.bottom() - 1.0),
         Align2::RIGHT_BOTTOM,
-        format!("{:.0}", hi),
+        format!("{}", hi as i32),
         theme::font(10.5),
         theme::SUB,
     );
+}
+
+/// 历史列表一项
+fn hist_item(ui: &mut egui::Ui, d: &Draw) {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 52.0), Sense::click());
+    let p = ui.painter().clone();
+    p.rect_filled(
+        rect,
+        13.0,
+        if resp.is_pointer_button_down_on() {
+            Color32::from_rgb(0xFA, 0xFB, 0xFC)
+        } else {
+            theme::CARD
+        },
+    );
+    p.rect_stroke(
+        rect,
+        13.0,
+        Stroke::new(1.0, theme::LINE),
+        egui::StrokeKind::Inside,
+    );
+
+    let left = rect.left() + 12.0;
+    p.text(
+        Pos2::new(left, rect.center().y - 8.0),
+        Align2::LEFT_CENTER,
+        &d.issue,
+        theme::bold(13.0),
+        theme::INK,
+    );
+    p.text(
+        Pos2::new(left, rect.center().y + 8.0),
+        Align2::LEFT_CENTER,
+        short_date(&d.date),
+        theme::font(10.5),
+        theme::SUB,
+    );
+
+    // 号码球：第一颗起点固定在 66 + 内边距处
+    let balls_left = left + 74.0;
+    let dsz = 23.0;
+    let gap = 4.0;
+    let mut x = balls_left + dsz * 0.5;
+    let cy = rect.center().y;
+    for &n in d.f.iter() {
+        theme::draw_ball(&p, Pos2::new(x, cy), dsz, n, true, false);
+        x += dsz + gap;
+    }
+    x += 3.0;
+    p.line_segment(
+        [Pos2::new(x, cy - 7.0), Pos2::new(x, cy + 7.0)],
+        Stroke::new(1.0, theme::LINE),
+    );
+    x += 4.0 + dsz * 0.5;
+    for &n in d.b.iter() {
+        theme::draw_ball(&p, Pos2::new(x, cy), dsz, n, false, false);
+        x += dsz + gap;
+    }
+    ui.add_space(7.0);
+}
+
+/* ============================ 主循环 ============================ */
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let bg = ui.max_rect();
+        ui.painter().rect_filled(bg, 0.0, theme::BG);
+
+        ui.vertical(|ui| {
+            self.header(ui);
+            self.sync_bar(ui);
+
+            let scroll_h = (ui.available_height() - theme::TABBAR_H).max(60.0);
+            egui::ScrollArea::vertical()
+                .max_height(scroll_h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: 14,
+                            right: 14,
+                            top: 12,
+                            bottom: 20,
+                        })
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            self.body(ui);
+                        });
+                });
+            self.tabbar(ui);
+        });
+
+        // toast
+        if let Some((msg, left)) = &mut self.toast {
+            let dt = ui.ctx().input(|i| i.stable_dt).min(0.1) as f64;
+            *left -= dt;
+            let text = msg.clone();
+            theme::toast(ui, &text);
+            if *left <= 0.0 {
+                self.toast = None;
+            } else {
+                ui.ctx().request_repaint();
+            }
+        }
+    }
 }
