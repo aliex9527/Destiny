@@ -8,36 +8,69 @@ aapt2 -> javac -> d8 -> 打包 dex -> zipalign -> apksigner
 因此所有中间产物都在 ASCII 临时目录完成，最后再把 APK 拷回 dist/。
 
 用法：python tools/build_apk.py
+
+环境变量（全部可选，默认值即原本地工具链布局，CI 用它们改指向）：
+    DLT_JDK          JDK 根目录（其下需有 bin/java、bin/javac、bin/keytool）
+    DLT_BT           Android build-tools 目录（含 aapt2、zipalign、lib/d8.jar）
+    DLT_ANDROID_JAR  android.jar 路径
+    DLT_KS           签名密钥路径
+    DLT_KS_PASS      密钥库口令
+    DLT_KS_ALIAS     密钥别名
+    DLT_VERSION      覆盖 versionName
+    DLT_VERSION_CODE 覆盖 versionCode
+    DLT_REQUIRE_KS   设为 1 时，密钥缺失直接失败（CI 用，避免误生成新签名）
 """
-import os, re, sys, shutil, subprocess, zipfile, time
+import os, re, sys, shutil, subprocess, zipfile, time, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOL = os.path.join(ROOT, 'toolchain')
-JDK = os.path.join(TOOL, 'zulu17.54.21-ca-jdk17.0.13-win_x64')
-BT = os.path.join(TOOL, 'android-sdk', 'build-tools', '34.0.0')
-ANDROID_JAR = os.path.join(TOOL, 'android.jar')
+TOOL = os.environ.get('DLT_TOOLCHAIN') or os.path.join(ROOT, 'toolchain')
+JDK = os.environ.get('DLT_JDK') or os.path.join(TOOL, 'zulu17.54.21-ca-jdk17.0.13-win_x64')
+BT = os.environ.get('DLT_BT') or os.path.join(TOOL, 'android-sdk', 'build-tools', '34.0.0')
+ANDROID_JAR = os.environ.get('DLT_ANDROID_JAR') or os.path.join(TOOL, 'android.jar')
 APP = os.path.join(ROOT, 'app')
 DIST = os.path.join(ROOT, 'dist')
-KS_SRC = os.path.join(ROOT, 'keystore', 'dlt-release.jks')
+KS_SRC = os.environ.get('DLT_KS') or os.path.join(ROOT, 'keystore', 'dlt-release.jks')
 
-VERSION = '1.4.0'
-VERSION_CODE = '8'
+_ver = os.environ.get('DLT_VERSION')
+_code = os.environ.get('DLT_VERSION_CODE')
+if _ver and not _code:
+    # 只给了版本号时按 MAJOR*10000+MINOR*100+PATCH 编码，保证单调递增
+    _p = ([int(x) for x in re.findall(r'\d+', _ver)[:3]] + [0, 0, 0])[:3]
+    _code = str(_p[0] * 10000 + _p[1] * 100 + _p[2])
+
+VERSION = _ver or '1.4.1'
+VERSION_CODE = _code or '9'
 APP_NAME = '运'
-KS_PASS = 'micai2026'
-KS_ALIAS = 'dlt'
+KS_PASS = os.environ.get('DLT_KS_PASS') or 'micai2026'
+KS_ALIAS = os.environ.get('DLT_KS_ALIAS') or 'dlt'
+REQUIRE_KS = os.environ.get('DLT_REQUIRE_KS') == '1'
 
-STAGE = os.path.join(os.environ.get('TEMP', 'C:\\temp'), 'dltbuild')
+STAGE = os.path.join(os.environ.get('TEMP') or tempfile.gettempdir(), 'dltbuild')
 BUILD = os.path.join(STAGE, 'build')
 KS = os.path.join(STAGE, 'dlt-release.jks')
 
-JAVA = os.path.join(JDK, 'bin', 'java.exe')
-JAVAC = os.path.join(JDK, 'bin', 'javac.exe')
-KEYTOOL = os.path.join(JDK, 'bin', 'keytool.exe')
-AAPT2 = os.path.join(BT, 'aapt2.exe')
-ZIPALIGN = os.path.join(BT, 'zipalign.exe')
+
+def _pick(bindir, name):
+    """优先取指定目录下的可执行文件；没有则回退到 PATH 中的同名命令。"""
+    for cand in (name + '.exe', name):
+        p = os.path.join(bindir, cand)
+        if os.path.exists(p):
+            return p
+    return name
+
+
+def _exists(tool):
+    return os.path.exists(tool) or (not os.path.isabs(tool) and shutil.which(tool))
+
+
+JAVA = _pick(os.path.join(JDK, 'bin'), 'java')
+JAVAC = _pick(os.path.join(JDK, 'bin'), 'javac')
+KEYTOOL = _pick(os.path.join(JDK, 'bin'), 'keytool')
+AAPT2 = _pick(BT, 'aapt2')
+ZIPALIGN = _pick(BT, 'zipalign')
 D8_JAR = os.path.join(BT, 'lib', 'd8.jar')
 SIGNER_JAR = os.path.join(BT, 'lib', 'apksigner.jar')
-AAPT = os.path.join(BT, 'aapt.exe')
+AAPT = _pick(BT, 'aapt')
 
 
 def run(cmd, desc, cwd=None):
@@ -78,6 +111,10 @@ def main():
 
     # 0. keystore
     if not os.path.exists(KS):
+        if REQUIRE_KS:
+            print('[失败] 签名密钥缺失：%s' % KS_SRC)
+            print('       CI 下必须提供原有密钥，否则会生成新签名，导致无法覆盖升级。')
+            sys.exit(2)
         run([KEYTOOL, '-genkeypair', '-keystore', KS, '-alias', KS_ALIAS,
              '-keyalg', 'RSA', '-keysize', '2048', '-validity', '10000',
              '-storepass', KS_PASS, '-keypass', KS_PASS,
@@ -154,7 +191,7 @@ def main():
     # 8. 校验
     print('\n>> 校验签名')
     run([JAVA, '-jar', SIGNER_JAR, 'verify', '--verbose', signed], 'apksigner verify')
-    if os.path.exists(AAPT):
+    if _exists(AAPT):
         info = run([AAPT, 'dump', 'badging', signed], 'aapt badging')
         for line in info.splitlines():
             if line.startswith(('package:', 'application-label', 'launchable-activity',
@@ -170,7 +207,7 @@ def main():
     shutil.copy2(signed, out_apk)
     # 保存 keystore 以便下次同签名升级
     if not os.path.exists(KS_SRC):
-        os.makedirs(os.path.dirname(KS_SRC))
+        os.makedirs(os.path.dirname(KS_SRC), exist_ok=True)
         shutil.copy2(KS, KS_SRC)
 
     size = os.path.getsize(out_apk) / 1048576.0

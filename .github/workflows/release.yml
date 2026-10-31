@@ -1,75 +1,94 @@
-name: Release APK
+name: Build & Release
 
-# 推送 v* 形式的 tag 即自动创建 Release。
-# dist/ 不进仓库，若检出后存在安装包则一并上传，否则只建 Release、
-# 由人工在网页补传附件（构建需要本地 JDK + Android SDK 工具链，CI 不承担构建）。
+# 推送 v* tag 即在本机构建 APK 并发布 Release。
+# 构建在 CI 完成，仓库不存放任何二进制；签名沿用同一个 keystore（来自 Secrets），
+# 因此升级链路与本地构建的包一致。
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的版本号，如 v1.4.1（须已存在的 tag）'
+        required: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  build-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 检查是否附带安装包
-        id: apk
-        run: |
-          if compgen -G "dist/*.apk" > /dev/null; then
-            echo "found=yes" >> "$GITHUB_OUTPUT"
-            ls -l dist/*.apk
-            sha256sum dist/*.apk
-          else
-            echo "found=no" >> "$GITHUB_OUTPUT"
-            echo "dist/ 内无安装包，将只创建 Release"
-          fi
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-      - name: 创建 Release 并上传 APK
-        if: steps.apk.outputs.found == 'yes'
+      - name: 准备 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 build-tools 34 与 platform 34
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "build-tools;34.0.0" "platforms;android-34"
+
+      - name: 还原签名密钥
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::缺少 Secrets.KEYSTORE_BASE64，无法签名。见 RELEASE.md 配置说明。"
+            exit 1
+          fi
+          mkdir -p keystore
+          printf '%s' "$KS_B64" | base64 -d > keystore/dlt-release.jks
+          ls -l keystore/dlt-release.jks
+
+      - name: 解析版本号
+        id: ver
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          V="${REF#v}"
+          echo "VERSION=$V" >> "$GITHUB_OUTPUT"
+          echo "versionName=$V（versionCode 由脚本按 MAJOR*10000+MINOR*100+PATCH 计算）"
+
+      - name: 构建 APK
+        env:
+          DLT_JDK: ${{ env.JAVA_HOME }}
+          DLT_BT: ${{ env.ANDROID_HOME }}/build-tools/34.0.0
+          DLT_ANDROID_JAR: ${{ env.ANDROID_HOME }}/platforms/android-34/android.jar
+          DLT_KS: ${{ github.workspace }}/keystore/dlt-release.jks
+          DLT_KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          DLT_VERSION: ${{ steps.ver.outputs.VERSION }}
+          DLT_REQUIRE_KS: '1'
+        run: |
+          python3 tools/build_apk.py
+          ls -l dist/*.apk
+          sha256sum dist/*.apk
+
+      - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: 运 ${{ steps.ver.outputs.VERSION }}
           files: dist/*.apk
-          name: 运 ${{ github.ref_name }}
           draft: false
           prerelease: false
           body: |
-            ## 运 ${{ github.ref_name }}
+            ## 运 ${{ steps.ver.outputs.VERSION }}
 
             纯本地运行的彩票数据分析工具（Android）。
 
             - 包名 `com.micai.dlt`，最低 Android 6.0（API 23），目标 API 34
-            - 安装包见下方附件，或本地执行 `python tools/build_apk.py` 自行构建
+            - 安装包见下方附件，签名与历史版本一致，可直接覆盖升级
 
-            ### 本版变更
+            ### 构建信息
 
-            - 品牌名「运」，启动图标与应用内 logo 为同一图形（深红底 + 五白柱 + 两亮蓝柱）
-            - 具体改动见本 tag 对应的提交记录
-
-            > 开奖数据来自官方公开结果，仅供个人研究与娱乐使用，本项目不提供任何购彩服务。
-
-      - name: 创建 Release（无附件）
-        if: steps.apk.outputs.found == 'no'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: 运 ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-          body: |
-            ## 运 ${{ github.ref_name }}
-
-            纯本地运行的彩票数据分析工具（Android）。
-
-            安装包未随仓库分发，本地构建：
-
-            ```bash
-            python tools/build_apk.py
-            ```
-
-            产物在 `dist/`，可手动上传到本 Release。
+            - 由 GitHub Actions 在 Ubuntu 上使用 JDK 17 + Android build-tools 34 构建
+            - 构建脚本 `tools/build_apk.py`（无 Gradle），产物经 zipalign 与 apksigner v1/v2/v3 签名
 
             > 开奖数据来自官方公开结果，仅供个人研究与娱乐使用，本项目不提供任何购彩服务。
