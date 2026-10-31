@@ -70,10 +70,38 @@ python tools/release.py --no-build --no-push  # 只打本地 tag，看清要推�
 git push -f origin v1.5.1                     # 推 tag 触发发布
 ```
 
+## 仓库删除重建后的恢复
+
+代码、密钥、产物全在本地，重建远端不需要重新构建，也不会改变签名（新旧包 sha256 一致，可继续覆盖升级）。
+
+```bash
+# 1. 确认远端是空仓库：无任何输出且 ssh 认证正常 = 空仓库
+git ls-remote origin
+
+# 2. 清掉指向旧仓库的陈旧引用，否则 origin/release-assets 仍存在会误导判断
+git remote prune origin
+
+# 3. 推主干
+git push -u origin main
+
+# 4. 重建安装包分支 + 重打 tag + 触发 CI（--no-build 复用 dist/ 里的包）
+python tools/release.py --no-build --version 1.5.0 --retag
+```
+
+要点：
+
+- **必须带 `--retag`**，因为本地 tag 还在；不带会直接报「tag 已存在」
+- **只推当前版本的 tag**。`release-assets` 分支始终只放一个版本的 APK，把 `v1.4.0` 这类旧 tag 一并推上去，CI 会因「包内版本与 tag 不一致」失败
+- 远端空仓库时 `tools/release.py` 的「先删远端 tag」分支自动跳过，无需额外处理
+- 不需要配置任何 Secret。CI 只取回已签名的包，不做构建
+- 重建后 Releases 为空是正常的，推完 tag 约 30 秒后自动补回
+
 ## 排错
 
 | 现象 | 原因 |
 | --- | --- |
+| 删库重建后 Releases 空白 | 只推了 `main`，没推 `release-assets` 和 tag；按上一节走到第 4 步 |
+| `git ls-remote` 报 `Repository not found` | 仓库不存在或改名后 remote 未更新：`git remote set-url origin git@github.com:<owner>/<repo>.git` |
 | `缺少签名密钥` 且退出码 2 | 本机 `keystore/dlt-release.jks` 不存在，从备份恢复 |
 | `apksigner verify` 失败 | 密钥口令不对（`KS_PASS` / `DLT_KS_PASS`） |
 | CI 报 `远端没有 release-assets 分支` | 没先跑 `tools/release.py` 推包，或只推了 tag |
