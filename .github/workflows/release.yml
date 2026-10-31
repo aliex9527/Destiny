@@ -1,9 +1,11 @@
-name: Build & Release
+name: Release
 
-# 推送 v* tag 即在本机构建 APK 并发布 Release。
-# 不依赖任何 JDK / Android 的 marketplace action：runner 自带环境，由 tools/ci_build.sh 探测并回退。
-# 诊断设计：无论成功失败，最后都会把 ci-build.log 推到 ci-logs 分支，
-# 因此只靠 git（SSH）就能读到 CI 日志，不需要任何 token。
+# 签名密钥只保存在本地，CI 不再构建，避免密钥进入仓库。
+# 流程：本地 tools/release.py 构建并签名 → APK 推到 release-assets 分支 → 推送 v* tag
+#       → 本工作流取回该 APK、校验后发布 Release。
+# release-assets 是单提交孤儿分支，每次发布强制覆盖，不累积历史。
+# 诊断设计：无论成功失败，最后都把 ci-build.log 推到 ci-logs 分支，
+# 因此只靠 git（SSH）就能读到日志，不需要任何 token。
 on:
   push:
     tags:
@@ -11,17 +13,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的版本号，如 v1.4.1（须已存在的 tag）'
+        description: '要发布的版本号，如 v1.5.1（须已存在的 tag）'
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  build-release:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 解析版本号
         id: ver
@@ -32,34 +36,70 @@ jobs:
           echo "VERSION=$V" >> "$GITHUB_OUTPUT"
           { echo "== 解析版本 =="; echo "tag=$REF version=$V"; } 2>&1 | tee -a ci-build.log
 
-      - name: 校验签名密钥
+      - name: 取回本地构建的安装包
+        id: fetch_apk
+        env:
+          VER: ${{ steps.ver.outputs.VERSION }}
         run: |
           set -o pipefail
-          { echo "== 校验签名密钥 =="
-            KS=keystore/dlt-release.jks
-            if [ ! -f "$KS" ]; then
-              echo "[失败] 仓库中缺少 $KS"
-              echo "       密钥应随仓库提交，见 RELEASE.md"
+          { echo "== 取回 release-assets =="
+            if ! git fetch --depth=1 origin release-assets 2>/dev/null; then
+              echo "[失败] 远端没有 release-assets 分支"
+              echo "       先在本地执行：python tools/release.py --version $VER"
               exit 1
             fi
-            ls -l "$KS"
-            echo "sha256: $(sha256sum "$KS" | cut -d' ' -f1)"
+            mkdir -p dist
+            files=$(git ls-tree -r --name-only FETCH_HEAD | grep -Ei '\.apk$' || true)
+            if [ -z "$files" ]; then echo "[失败] release-assets 分支里没有 apk"; exit 1; fi
+            for f in $files; do
+              out="dist/$(basename "$f")"
+              git show "FETCH_HEAD:$f" > "$out"
+              echo "取出 $f -> $out"
+            done
+            ls -l dist/
+            sha256sum dist/*.apk
           } 2>&1 | tee -a ci-build.log
 
-      - name: 构建 APK
-        id: build
+      - name: 校验安装包
         continue-on-error: true
         env:
           VER: ${{ steps.ver.outputs.VERSION }}
-          DLT_VERSION: ${{ steps.ver.outputs.VERSION }}
         run: |
           set -o pipefail
-          bash tools/ci_build.sh 2>&1 | tee -a ci-build.log
-          exit "${PIPESTATUS[0]}"
+          {
+            echo "== 校验安装包 =="
+            SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+            BT="$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"
+            BT="${BT%/}"
+            APK="$(ls dist/*.apk | head -1)"
+            echo "apk=$APK"
+            echo "build-tools=${BT:-<未找到>}"
+
+            if [ -n "$BT" ] && [ -x "$BT/aapt2" ]; then
+              BADGING="$("$BT/aapt2" dump badging "$APK" | head -1)"
+              echo "$BADGING"
+              VN="$(printf '%s' "$BADGING" | grep -o "versionName='[^']*'" | cut -d\"'\" -f2)"
+              VC="$(printf '%s' "$BADGING" | grep -o "versionCode='[^']*'" | cut -d\"'\" -f2)"
+              echo "包内 versionName=$VN versionCode=$VC / tag 期望 $VER"
+              if [ "$VN" != "$VER" ]; then
+                echo "[失败] 包内版本与 tag 不一致：$VN != $VER"
+                exit 1
+              fi
+            else
+              echo "[跳过] 找不到 aapt2，未能读取包内版本"
+            fi
+
+            if [ -n "$BT" ] && [ -f "$BT/lib/apksigner.jar" ]; then
+              java -jar "$BT/lib/apksigner.jar" verify --verbose "$APK" | tee /tmp/sig.txt
+              grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" /tmp/sig.txt \
+                || echo "[警告] 未检测到 v2 签名"
+            else
+              echo "[跳过] 找不到 apksigner.jar"
+            fi
+          } 2>&1 | tee -a ci-build.log
 
       - name: 发布 Release
         id: release
-        if: steps.build.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
@@ -77,22 +117,23 @@ jobs:
 
             ### 构建信息
 
-            - 由 GitHub Actions 在 Ubuntu 上构建（runner 自带 JDK 17 + Android SDK）
+            - 在本地构建并签名（签名密钥只保存在本机，不入仓库、不经 CI）
             - 构建脚本 `tools/build_apk.py`（无 Gradle），产物经 zipalign 与 apksigner v1/v2/v3 签名
+            - 本工作流只负责校验与分发：核对包内版本号与 tag 一致后上传附件
 
             > 开奖数据来自官方公开结果，仅供个人研究与娱乐使用，本项目不提供任何购彩服务。
 
-      - name: 构建失败则标记任务失败
-        if: steps.build.outcome != 'success'
+      - name: 发布失败则标记任务失败
+        if: steps.release.outcome != 'success'
         run: |
-          echo "构建未成功，日志已推送到 ci-logs 分支。"
+          echo "Release 未创建成功，日志见 ci-logs 分支。"
           exit 1
 
       - name: 回传日志到 ci-logs 分支
         if: always()
         run: |
           {
-            echo "build outcome: ${{ steps.build.outcome }}"
+            echo "fetch outcome: ${{ steps.fetch_apk.outcome }}"
             echo "release outcome: ${{ steps.release.outcome }}"
             echo "run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo "assets in dist:"
@@ -104,5 +145,5 @@ jobs:
           git config user.email "ci-bot@users.noreply.github.com"
           git checkout -B ci-logs
           git add -f .ci/ci-build.log
-          git commit -m "ci: build log for ${{ github.ref_name }} (${{ steps.build.outcome }})" || echo "no change"
+          git commit -m "ci: release log for ${{ github.ref_name }} (${{ steps.release.outcome }})" || echo "no change"
           git push -f origin ci-logs

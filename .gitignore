@@ -7,10 +7,8 @@ dist/
 # 本地工具链（JDK + Android SDK，约 470 MB，不入库）
 toolchain/
 
-# 签名密钥随仓库分发：CI 必须用同一把密钥签名，否则无法覆盖升级。
-# 仓库为私有，故直接入库；base64 副本是本机临时产物，不入库。
-keystore/*
-!keystore/dlt-release.jks
+# 签名密钥只留在本地，绝不入库（含 base64 副本）
+keystore/
 
 # 原始抓取数据与临时脚本产物
 data/
@@ -21,3 +19,7 @@ __pycache__/
 # CI 回传的构建日志
 ci-build.log
 .ci/
+
+# 本机临时日志
+debug.log
+*.log

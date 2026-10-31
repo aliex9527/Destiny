@@ -53,9 +53,9 @@ app/
 python tools/build_apk.py
 ```
 
-产物写入 `dist/`。脚本要求本地存在 `toolchain/`（JDK 17 + Android build-tools 34 + android.jar），该目录不随仓库分发；签名密钥 `keystore/dlt-release.jks` 则随仓库提交，以保证 CI 与本地签名一致。
+产物写入 `dist/`。脚本要求本地存在 `toolchain/`（JDK 17 + Android build-tools 34 + android.jar）与签名密钥 `keystore/dlt-release.jks`；这两样都只在本机，不随仓库分发。
 
-> 发版走 CI：推送 `v*` tag 后由 GitHub Actions 构建并发布 Release，配置方法与版本号规则见 [RELEASE.md](RELEASE.md)。
+> 发布：本地构建签名 → 推安装包到 `release-assets` 分支 → 推 `v*` tag，CI 取回该包、校验后发布 Release。一条命令：`python tools/release.py --version 1.5.1`。详见 [RELEASE.md](RELEASE.md)。
 
 > aapt2 在含中文的路径下会报 `failed to open directory`，脚本因此把全部中间产物放在 ASCII 临时目录，最后再拷回 `dist/`。
 
