@@ -15,3 +15,7 @@ data/
 .workbuddy/
 __pycache__/
 *.pyc
+
+# CI 回传的构建日志
+ci-build.log
+.ci/
