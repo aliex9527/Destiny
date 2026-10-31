@@ -32,31 +32,25 @@ jobs:
           echo "VERSION=$V" >> "$GITHUB_OUTPUT"
           { echo "== 解析版本 =="; echo "tag=$REF version=$V"; } 2>&1 | tee -a ci-build.log
 
-      - name: 还原签名密钥
-        continue-on-error: true
-        env:
-          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+      - name: 校验签名密钥
         run: |
           set -o pipefail
-          { echo "== 还原签名密钥 =="
-            if [ -z "${KS_B64:-}" ]; then
-              echo "[失败] 缺少 Secrets.KEYSTORE_BASE64"
-              echo "       到 Settings → Secrets and variables → Actions 添加，见 RELEASE.md"
+          { echo "== 校验签名密钥 =="
+            KS=keystore/dlt-release.jks
+            if [ ! -f "$KS" ]; then
+              echo "[失败] 仓库中缺少 $KS"
+              echo "       密钥应随仓库提交，见 RELEASE.md"
               exit 1
             fi
-            echo "b64 长度: ${#KS_B64}"
-            mkdir -p keystore
-            printf '%s' "$KS_B64" | base64 -d > keystore/dlt-release.jks
-            ls -l keystore/dlt-release.jks
+            ls -l "$KS"
+            echo "sha256: $(sha256sum "$KS" | cut -d' ' -f1)"
           } 2>&1 | tee -a ci-build.log
 
       - name: 构建 APK
         id: build
         continue-on-error: true
         env:
-          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           VER: ${{ steps.ver.outputs.VERSION }}
-          DLT_KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           DLT_VERSION: ${{ steps.ver.outputs.VERSION }}
         run: |
           set -o pipefail

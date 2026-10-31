@@ -2,28 +2,25 @@
 
 构建在 GitHub Actions 上完成，仓库只存源码，不存任何 APK。推送一个 `v*` 形式的 tag，CI 会自动完成「构建 → 签名 → 发布 Release → 上传安装包」。
 
-## 一次性配置
+## 密钥放置
 
-需要在该仓库配置两个 Secret：**Settings → Secrets and variables → Actions → New repository secret**
+**不需要任何 Secret。** 签名密钥 `keystore/dlt-release.jks` 直接提交在仓库里，CI checkout 后即可签名。
 
-| Secret 名称 | 值 |
-| --- | --- |
-| `KEYSTORE_BASE64` | `keystore/dlt-release.jks.b64` 文件的**全部内容**（单行，约 3.6 KB） |
-| `KEYSTORE_PASSWORD` | 密钥库口令，即 `tools/build_apk.py` 中 `KS_PASS` 的值 |
+为什么这样：Android 包必须用同一把密钥签名才能覆盖升级。此前走 Secrets（`KEYSTORE_BASE64`）方案，但仓库重建时 GitHub 会清空 Secrets，且 fine-grained token 不支持 Secrets API，无法脚本化恢复，反复卡在这一步。本仓库为私有，故改为密钥入库，换取发布链路零配置。
 
-`KEYSTORE_BASE64` 的生成方式（仓库里的 `.b64` 文件已经生成好，直接复制即可；若密钥更换过则重新生成）：
+代价：**任何能读这个仓库的人都能签出可覆盖安装的更新包**。所以
+
+- 不要把仓库转为公开，也慎加协作者
+- 若将来必须开源，先把密钥移回 Secrets 并更换新密钥（老用户需卸载重装一次）
+
+口令与别名仍沿用 `tools/build_apk.py` 内的默认值 `micai2026` / `dlt`，可用 `DLT_KS_PASS` / `DLT_KS_ALIAS` 覆盖。
+
+密钥完整性由 CI 第一步打印 sha256，历史值见对应 tag 的构建日志。
 
 ```bash
-base64 -w0 keystore/dlt-release.jks > keystore/dlt-release.jks.b64
+# CI 里实际执行的校验（tools/ci_build.sh 内部）
+sha256sum keystore/dlt-release.jks
 ```
-
-Windows 无 `base64` 时可用 PowerShell：
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("keystore/dlt-release.jks")) | Set-Content -NoNewline keystore/dlt-release.jks.b64
-```
-
-> `keystore/` 整个目录在 `.gitignore` 中，密钥与 `.b64` 都不会进仓库。Secret 一旦设置便无法回读，只能覆盖。
 
 ## 日常发布
 
@@ -72,10 +69,12 @@ CI 与本地使用同一份 `tools/build_apk.py`，工具路径由环境变量�
 
 | 现象 | 原因 |
 | --- | --- |
-| `缺少 Secrets.KEYSTORE_BASE64` | Secret 未配置，或名字拼错 |
-| `签名密钥缺失` 且退出码 2 | `DLT_KS` 指向的密钥没还原成功，检查上一步日志 |
-| `apksigner verify` 失败 | `KEYSTORE_PASSWORD` 与密钥库不匹配 |
+| `仓库中缺少 keystore/dlt-release.jks` | 密钥没提交进仓库，或 checkout 被裁剪 |
+| `签名密钥缺失` 且退出码 2 | `DLT_KS` 指向的路径不存在，看构建日志第一步的探测结果 |
+| `apksigner verify` 失败 | 密钥库口令不对（`KS_PASS` / `DLT_KS_PASS`） |
+| `build outcome: failure` 但日志看不到 | 拉到 `ci-logs` 分支：`git fetch origin ci-logs` 后看 `.ci/ci-build.log` |
 | Actions 不触发 | 仓库禁用了 Actions：Settings → Actions → General → 允许所有 action |
 | Release 已建但无附件 | 检查 `dist/*.apk` 是否生成，看构建步骤日志 |
+| 无密钥时想单独验证构建 | 推 `smoke-*` tag，走 `smoke.yml`，自动生成临时签名且不发布 |
 
 > 换成新密钥会让新旧包签名不一致，已安装的旧版本无法直接覆盖升级，必须卸载重装。因此密钥务必妥善保存，不要随意重新生成。
