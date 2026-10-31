@@ -1,7 +1,8 @@
 name: Release APK
 
-# 推送 v* 形式的 tag 即自动创建 Release 并附上 dist/ 内的安装包。
-# 使用仓库自带的 GITHUB_TOKEN，无需任何个人凭证。
+# 推送 v* 形式的 tag 即自动创建 Release。
+# dist/ 不进仓库，若检出后存在安装包则一并上传，否则只建 Release、
+# 由人工在网页补传附件（构建需要本地 JDK + Android SDK 工具链，CI 不承担构建）。
 on:
   push:
     tags:
@@ -16,12 +17,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 校验安装包
+      - name: 检查是否附带安装包
+        id: apk
         run: |
-          ls -l dist/*.apk
-          sha256sum dist/*.apk
+          if compgen -G "dist/*.apk" > /dev/null; then
+            echo "found=yes" >> "$GITHUB_OUTPUT"
+            ls -l dist/*.apk
+            sha256sum dist/*.apk
+          else
+            echo "found=no" >> "$GITHUB_OUTPUT"
+            echo "dist/ 内无安装包，将只创建 Release"
+          fi
 
       - name: 创建 Release 并上传 APK
+        if: steps.apk.outputs.found == 'yes'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.apk
@@ -34,12 +43,34 @@ jobs:
             纯本地运行的彩票数据分析工具（Android）。
 
             - 包名 `com.micai.dlt`，最低 Android 6.0（API 23），目标 API 34
-            - 下载下方 `运_${{ github.ref_name }}.apk` 直接安装
+            - 安装包见下方附件，或本地执行 `python tools/build_apk.py` 自行构建
 
             ### 本版变更
 
             - 品牌名统一为「运」，替换原「大乐透智算」
             - 启动图标与应用内 logo 统一为深红底 + 五白柱 + 两亮蓝柱
             - 版本 1.4.0（versionCode 8）
+
+            > 开奖数据来自官方公开结果，仅供个人研究与娱乐使用，本项目不提供任何购彩服务。
+
+      - name: 创建 Release（无附件）
+        if: steps.apk.outputs.found == 'no'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 运 ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          body: |
+            ## 运 ${{ github.ref_name }}
+
+            纯本地运行的彩票数据分析工具（Android）。
+
+            安装包未随仓库分发，本地构建：
+
+            ```bash
+            python tools/build_apk.py
+            ```
+
+            产物在 `dist/`，可手动上传到本 Release。
 
             > 开奖数据来自官方公开结果，仅供个人研究与娱乐使用，本项目不提供任何购彩服务。
