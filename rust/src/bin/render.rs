@@ -192,6 +192,10 @@ fn main() {
 
     for (idx, tab) in tabs.iter().enumerate() {
         app.set_tab(*tab);
+        // 推演页预先生成一版结果，否则结果区（契合度徽章等）渲染不出来
+        if *tab == destiny::app::Tab::Predict && app.predict.is_none() {
+            app.run_predict();
+        }
 
         let mut last: Option<egui::FullOutput> = None;
         // egui 的字体图集是懒增长的：某帧绘制时按旧尺寸算 uv，

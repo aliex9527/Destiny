@@ -43,6 +43,11 @@ pub const PAGE_PAD: f32 = 14.0;
 pub const HEADER_H: f32 = 56.0;
 pub const SYNC_H: f32 = 34.0;
 pub const TABBAR_H: f32 = 58.0;
+
+/// 顶部安全区高度：避让安卓前置摄像头（打孔/刘海）与系统状态栏标头。
+/// NativeActivity 默认全屏沉浸式，系统栏直接压在界面最顶，不预留会让
+/// 标题和同步按钮被信号/时间/挖孔遮住。取 32≈大屏机型的状态栏 + 打孔区域高度。
+pub const STATUS_BAR_H: f32 = 32.0;
 /// 号码球直径（CSS .ball 33px）
 pub const BALL_D: f32 = 33.0;
 
@@ -421,11 +426,14 @@ pub fn para(ui: &mut Ui, text: &str, size: f32, color: Color32, line: f32) {
 pub fn disclaimer(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
     ui.horizontal(|ui| {
+        // 默认 item_spacing.x=8 会让 add_space(4) 实占 12，左右就不对称了
+        ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(4.0);
         ui.vertical(|ui| {
             ui.set_width(ui.available_width() - 4.0);
             para(ui, text, 11.0, FAINT, 1.65);
         });
+        ui.add_space(4.0);
     });
     ui.add_space(6.0);
 }

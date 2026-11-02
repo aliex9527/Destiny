@@ -10,10 +10,15 @@ egui 不绑定任何字体，中文必须自带；而且 egui 不支持合成加
   rust/assets/font_bold.ttf      粗体，只覆盖源码实际用字（体积小），
                                  缺字时 egui 自动回退到常规字重，不会出豆腐块
 
+仿宋只有 Regular 一个字重。当 --regular 与 --bold 指向同一个文件时，
+自动调 tools/embolden_font.py 沿轮廓描边把笔画撑宽，合成出粗体，
+否则标题和正文会完全一样粗，界面层级当场消失。
+
 用法：
-    python tools/make_font.py                              # 默认微软雅黑（最接近原版 WebView）
-    python tools/make_font.py --regular X.ttf --bold Y.ttf  # 指定任意两个字重文件
-    python tools/make_font.py --regular simfang.ttf --bold simfang.ttf   # 仿宋（单字重会退化）
+    python tools/make_font.py                     # 默认仿宋 + 合成粗体
+    python tools/make_font.py --embolden 0         # 关掉合成，粗体=常规（会失去层级）
+    python tools/make_font.py --regular X.ttf --bold Y.ttf   # 真两个字重，不合成
+    python tools/make_font.py --regular msyh.ttc --bold msyhbd.ttc   # 微软雅黑
 """
 import argparse
 import os
@@ -23,10 +28,14 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, 'rust', 'assets')
 
-# 默认字体：微软雅黑。与原版 CSS 的 "Microsoft YaHei" 同一字体，
-# 也是 WebView 在 Windows/多数国产 ROM 上的实际回退目标，观感最接近。
-DEF_REGULAR = r'C:\Windows\Fonts\msyh.ttc'
-DEF_BOLD = r'C:\Windows\Fonts\msyhbd.ttc'
+# 默认字体：仿宋。原版界面用 "FangSong / 方正仿宋_GB2312"，
+# Windows 自带 simfang.ttf 是同一族的等价字体（upem=256，只在 Regular 一个字重）。
+DEF_REGULAR = r'C:\Windows\Fonts\simfang.ttf'
+DEF_BOLD = DEF_REGULAR
+
+# 合成粗体的描边总宽（字体单位）。upem=256 的仿宋取 9 时墨量约为常规的 2 倍，
+# 视觉上明显是粗体；再大会让笔画粘连，再小则与常规几乎看不出差别。
+DEF_EMBOLDEN = 9.0
 
 # 扫描范围：这些目录里的文本决定了「实际用到的字符」
 SCAN_DIRS = ['app/src/main/assets', 'rust/src']
@@ -121,6 +130,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--regular', default=DEF_REGULAR, help='常规字重源文件（可写 path#face）')
     ap.add_argument('--bold', default=DEF_BOLD, help='粗体源文件（可写 path#face）')
+    ap.add_argument('--embolden', type=float, default=DEF_EMBOLDEN,
+                    help='单字重字体合成粗体的描边宽度，0 表示不合成')
     ap.add_argument('--no-gb2312', action='store_true', help='常规字重也不并入 GB2312 全集')
     ap.add_argument('--out-dir', default=OUT_DIR)
     a = ap.parse_args()
@@ -136,8 +147,24 @@ def main():
     # 粗体：只覆盖实际用字，体积能省一大半；缺字由 egui 回退到常规字重
     bold = set(used) | set(EXTRA) | set(chr(c) for c in range(0x20, 0x7F))
 
-    ok = build(a.regular, reg, os.path.join(a.out_dir, 'font_regular.ttf'))
-    ok = build(a.bold, bold, os.path.join(a.out_dir, 'font_bold.ttf')) and ok
+    reg_out = os.path.join(a.out_dir, 'font_regular.ttf')
+    bold_out = os.path.join(a.out_dir, 'font_bold.ttf')
+
+    ok = build(a.regular, reg, reg_out)
+
+    # 同一个源文件 = 单字重字体，必须自己合成粗体，否则粗细层级全丢
+    single_weight = (a.regular == a.bold)
+    if single_weight and a.embolden > 0:
+        import embolden_font
+        plain = bold_out + '.plain'
+        ok = build(a.bold, bold, plain) and ok
+        ok = embolden_font.build(plain, bold_out, a.embolden, 'miter', 2.0) and ok
+        if os.path.exists(plain):
+            os.remove(plain)
+    else:
+        if single_weight:
+            print('[font] 警告：单字重字体且 --embolden 0，粗体将与常规完全一致')
+        ok = build(a.bold, bold, bold_out) and ok
 
     if ok:
         total = sum(os.path.getsize(os.path.join(a.out_dir, n))

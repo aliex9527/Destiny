@@ -370,7 +370,6 @@ impl App {
 
             // 生成注数
             ui.horizontal(|ui| {
-                ui.add_space(1.0);
                 ui.label(theme::rb("生成注数", 13.0, theme::INK2));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(i) = theme::seg(ui, &["1 注", "3 注", "5 注", "10 注"], count_idx(self.count), false) {
@@ -415,7 +414,7 @@ impl App {
         );
     }
 
-    fn run_predict(&mut self) {
+    pub fn run_predict(&mut self) {
         let t = std::time::Instant::now();
         let opts = PredictOpts {
             strategy: self.strategy,
@@ -475,9 +474,12 @@ impl App {
         });
 
         // ---- 单式 / 复式，不追加 / 追加（CSS .ck-seg：两个各占一半，间距 8）----
-        let half = ((ui.available_width() - 9.0) * 0.5).max(80.0);
+        // 注意：horizontal 里每个元素之间还有默认 item_spacing.x=8，
+        // 不关掉的话 add_space(8) 实际占 16，整行会超宽、右侧溢出贴边。
+        let avail = ui.available_width();
+        let half = ((avail - 8.0) * 0.5).max(80.0);
         ui.horizontal(|ui| {
-            ui.add_space(1.0);
+            ui.spacing_mut().item_spacing.x = 0.0;
             if let Some(i) = theme::seg_fixed(
                 ui,
                 &["单式", "复式"],
@@ -526,8 +528,10 @@ impl App {
         });
 
         // ---- 操作 ----
+        let avail = ui.available_width();
+        let w = ((avail - 8.0) * 0.5).max(80.0);
         ui.horizontal(|ui| {
-            let w = (ui.available_width() - 8.0) * 0.5;
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui(Vec2::new(w, 40.0), |ui| {
                 if theme::ghost(ui, "拍照对照", 40.0, false).clicked() {
                     // 相机与照片导入尚未接入
@@ -782,14 +786,12 @@ impl App {
 
         // ---- 列表头 ----
         ui.horizontal(|ui| {
-            ui.add_space(3.0);
             ui.label(
                 egui::RichText::new(format!("共 {} 期", filtered.len()))
                     .size(11.5)
                     .color(theme::SUB),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(3.0);
                 ui.label(
                     egui::RichText::new("点击查看期次特征")
                         .size(11.5)
@@ -879,7 +881,10 @@ fn pick_card(ui: &mut egui::Ui, s: &engine::PickSet) {
             ui.set_width(w - 26.0);
             ui.horizontal(|ui| {
                 // 名次徽标
-                let (rk, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
+                // 序号占位与球行同高（26），方块在占位内居中：
+                // egui 横排不会把更矮的元素和球行垂直居中，直接放会偏上 ~12px
+                let (rk_full, _) = ui.allocate_exact_size(Vec2::new(20.0, 26.0), Sense::hover());
+                let rk = Rect::from_center_size(rk_full.center(), Vec2::splat(20.0));
                 let bg = if s.rank == 1 { theme::RED } else { theme::SEG_BG };
                 let fg = if s.rank == 1 { Color32::WHITE } else { theme::SUB };
                 ui.painter().rect_filled(rk, 6.0, bg);
@@ -894,35 +899,33 @@ fn pick_card(ui: &mut egui::Ui, s: &engine::PickSet) {
                 theme::balls_row(ui, &s.f, &s.b, 26.0, None);
             });
             ui.add_space(9.0);
-            // 特征行 + 契合度
+            // 特征行
+            ui.label(
+                egui::RichText::new(format!(
+                    "和值 {} · 跨度 {} · 奇偶 {}:{} · 大小 {}:{}",
+                    s.sum,
+                    s.span,
+                    s.odd_f,
+                    FRONT_PICK as u8 - s.odd_f,
+                    s.big_f,
+                    FRONT_PICK as u8 - s.big_f
+                ))
+                .size(11.5)
+                .color(theme::SUB),
+            );
+            ui.add_space(6.0);
+            // 契合度单独一行，放在特征行下方
+            // （契合度 0~1，原版显示为百分制整数，app.js: score*100）
             ui.horizontal(|ui| {
-                ui.add_space(1.0);
-                ui.label(
-                    egui::RichText::new(format!(
-                        "和值 {} · 跨度 {} · 奇偶 {}:{} · 大小 {}:{}",
-                        s.sum,
-                        s.span,
-                        s.odd_f,
-                        FRONT_PICK as u8 - s.odd_f,
-                        s.big_f,
-                        FRONT_PICK as u8 - s.big_f
-                    ))
-                    .size(11.5)
-                    .color(theme::SUB),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let txt = format!("{}", s.score.round() as i32);
-                    let g = ui
-                        .painter()
-                        .layout_no_wrap(txt.clone(), theme::bold(12.0), theme::RED);
-                    let (r, _) = ui.allocate_exact_size(
-                        Vec2::new(g.size().x + 14.0, 20.0),
-                        Sense::hover(),
-                    );
-                    ui.painter().rect_filled(r, 7.0, theme::RED_SOFT);
-                    ui.painter()
-                        .text(r.center(), Align2::CENTER_CENTER, txt, theme::bold(12.0), theme::RED);
-                });
+                let txt = format!("契合度 {}", (s.score * 100.0).round() as i32);
+                let g = ui
+                    .painter()
+                    .layout_no_wrap(txt.clone(), theme::bold(11.0), theme::RED);
+                let (r, _) =
+                    ui.allocate_exact_size(Vec2::new(g.size().x + 12.0, 20.0), Sense::hover());
+                ui.painter().rect_filled(r, 7.0, theme::RED_SOFT);
+                ui.painter()
+                    .text(r.center(), Align2::CENTER_CENTER, txt, theme::bold(11.0), theme::RED);
             });
             if !s.tags.is_empty() {
                 ui.add_space(8.0);
@@ -1466,6 +1469,9 @@ impl App {
         ui.painter().rect_filled(bg, 0.0, theme::BG);
 
         ui.vertical(|ui| {
+            // 顶部安全区：把内容整体下移，给前置摄像头和系统状态栏让位
+            ui.add_space(theme::STATUS_BAR_H);
+
             self.header(ui);
             self.sync_bar(ui);
 
@@ -1473,7 +1479,12 @@ impl App {
             egui::ScrollArea::vertical()
                 .max_height(scroll_h)
                 .auto_shrink([false, false])
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                // 注意：不要再加 vertical_scroll_offset —— 它每帧都会重置
+                // 滚动位置，用户的手势滑动会被覆盖（v2.2.5 因此无法下滑）。
+                // 手机上滚动条不常驻；而且 egui 的 bar 是浮在内容右侧的，
+                // 出现时会把整页内容往左挤 11px，左右边距就不对称了。
+                // 触摸拖动 / 滚轮滚动不受影响。
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     egui::Frame::new()

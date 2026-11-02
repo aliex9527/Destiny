@@ -31,3 +31,4 @@ Cargo.lock.bak
 # 字体子集是构建产物，且源字体随系统，不入库（构建前跑 tools/make_font.py）
 rust/assets/font_regular.ttf
 rust/assets/font_bold.ttf
+rust/fontbak/

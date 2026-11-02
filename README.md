@@ -121,22 +121,28 @@ cargo run --release --bin render     # 输出 target/preview-0..3.ppm
 
 ### 字体
 
-egui 不支持合成加粗，只嵌一个字重会让所有 `font-weight:700` 的标题塌成普通字重，
-整页看起来又细又糊。所以嵌**两套**：
+界面沿用原版的仿宋。Windows 自带的 `simfang.ttf` 是同一族字体（upem=256，单字重），
+但 egui 不支持合成加粗——单嵌一个字重会让所有 `font-weight:700` 的标题塌成普通字重，
+整页又细又糊。所以嵌**两套**：
 
 | 文件 | 来源 | 覆盖范围 | 体积 |
 | --- | --- | --- | --- |
-| `font_regular.ttf` | `msyh.ttc`（微软雅黑 400） | GB2312 全集 7016 字 | 1.7 MB |
-| `font_bold.ttf` | `msyhbd.ttc`（微软雅黑 700） | 源码实际用字 785 个 | 143 KB |
+| `font_regular.ttf` | `simfang.ttf`（仿宋 400） | GB2312 全集 7017 字 | 2.2 MB |
+| `font_bold.ttf` | `simfang.ttf` + 轮廓描边合成 | 源码实际用字 857 个 | 284 KB |
 
-粗体子集缺字时 egui 会自动回退到常规字重，不会出现方块。两套合计 1.83 MB，
-比原来单嵌仿宋（2.2 MB）还小。字体族注册在 `lib.rs` 的 `install_cn_font`，
-`theme::bold()` 走 `FontFamily::Name("bold")`。
+`tools/embolden_font.py` 负责合成粗体：沿每条轮廓描边 9 单位后与原轮廓求并集，
+相当于把笔画整体向外撑 4.5 单位（约 1.75% em），墨量约为常规的 2 倍——
+和真 Bold 的 1.5~1.7 倍同档，明显是粗体又不至于让笔画粘连。
 
-换字体只要把源文件传进去，代码不用动：
+粗体子集缺字时 egui 会自动回退到常规字重，不会出现方块。字体族注册在 `lib.rs`
+的 `install_cn_font`，`theme::bold()` 走 `FontFamily::Name("bold")`。
+
+换字体只要把源文件传进去，代码不用动（源与粗体同文件时自动合成）：
 
 ```bash
+python tools/make_font.py                                        # 默认仿宋 + 合成粗体
 python tools/make_font.py --regular "D:/fonts/X.ttf" --bold "D:/fonts/X-Bold.ttf"
+python tools/make_font.py --embolden 11                          # 笔画更重
 ```
 
 ## 图标
