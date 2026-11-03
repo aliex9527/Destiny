@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：全局禁止明文流量（HTTP）。
+  应用当前无网络请求；将来接同步接口时必须走 HTTPS，
+  服务端证书校验由系统默认执行，不可在配置里放宽。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

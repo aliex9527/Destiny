@@ -101,10 +101,18 @@ def cargo_build(target):
             sys.exit(1)
     env = dict(os.environ)
     env['PATH'] = os.path.dirname(exe) + os.pathsep + env.get('PATH', '')
+    # 注意：不要用 RUSTFLAGS 环境变量加链接参数——它会覆盖 .cargo/config.toml
+    # 里的 link-arg=--target=...，clang 拿不到 target 就按主机模式链接，直接报
+    # "unknown argument"。链接期加固参数走 `cargo rustc --` 附加，只影响最终
+    # 链接的 .so，依赖照常用 config 编译。
     # Cargo.toml 里 crate-type 只写 rlib（Windows 上同时产 cdylib 会撞 GNU ld 的
     # 导出序号上限）。.so 必须用 cargo rustc 显式指定 crate-type 单独产出。
+    # 安全加固（对应安全检测报告「源文件安全」项）：
+    #   -z relro -z now —— Full RELRO：GOT 表只读、启动期解析完所有符号，
+    #   防运行时篡改导入表劫持函数调用
     cmd = [exe, 'rustc', '--release', '--target', target, '--lib',
-           '--crate-type', 'cdylib', '--features', 'native']
+           '--crate-type', 'cdylib', '--features', 'native',
+           '--', '-C', 'link-arg=-Wl,-z,relro', '-C', 'link-arg=-Wl,-z,now']
     print('\n>> cargo %s' % ' '.join(cmd[1:]))
     print('   （首次编译依赖较多，可能需要几分钟）')
     p = subprocess.run(cmd, cwd=RUST_DIR, env=env)
