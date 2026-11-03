@@ -1,0 +1,32 @@
+== 解析版本 ==
+tag=v2.2.8 version=2.2.8
+== 取回 release-assets ==
+取出 dist/Destiny_v2.2.8.apk -> dist/Destiny_v2.2.8.apk
+total 3240
+-rw-r--r-- 1 runner runner 3314630 Nov  3 05:54 Destiny_v2.2.8.apk
+dde8a293156cf3e48307ef4a1d550a4caef3771d74010bfe07bae83074bc1ae4  dist/Destiny_v2.2.8.apk
+== 校验安装包 ==
+apk=dist/Destiny_v2.2.8.apk
+build-tools=/usr/local/lib/android/sdk/build-tools/37.0.0
+package: name='com.micai.dlt' versionCode='22008' versionName='2.2.8' platformBuildVersionName='14' platformBuildVersionCode='34' compileSdkVersion='34' compileSdkVersionCodename='14'
+包内 versionName=2.2.8 versionCode=22008 / tag 期望 2.2.8
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::loadLibrary has been called by org.conscrypt.NativeLibraryUtil in an unnamed module (file:/usr/local/lib/android/sdk/build-tools/37.0.0/lib/apksigner.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+Verifies
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v3.2 scheme (APK Signature Scheme v3.2): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+fetch outcome: success
+release outcome: success
+run: https://github.com/aliex9527/Destiny/actions/runs/41586581633
+assets in dist:
+total 3240
+-rw-r--r-- 1 runner runner 3314630 Nov  3 05:54 Destiny_v2.2.8.apk
